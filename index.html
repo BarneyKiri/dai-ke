@@ -267,6 +267,17 @@ table.data tbody tr:last-child td { border-bottom: none; }
 .modal-desc { font-size: 14px; color: var(--text-muted); margin-bottom: 22px; }
 .modal-actions { display: flex; gap: 10px; justify-content: center; }
 
+/* 电子代课单弹窗 */
+.slip-modal { max-width: 460px; width: 100%; max-height: 92vh; overflow-y: auto; text-align: left; padding: 22px; }
+.slip-title { font-family: var(--font-display); font-size: 20px; font-weight: 700; text-align: center; color: var(--primary-dark); margin-bottom: 8px; }
+.slip-remind {
+  font-size: 12px; line-height: 1.6; color: var(--danger);
+  background: #fdf0ee; border: 1px dashed #e8b4ac; border-radius: var(--radius-sm);
+  padding: 8px 10px; margin-bottom: 12px; text-align: left;
+}
+.slip-img { width: 100%; border-radius: 10px; border: 1px solid #dfe7e2; display: block; margin: 0 0 14px; box-shadow: var(--shadow-sm); }
+.slip-actions { display: flex; gap: 10px; justify-content: center; }
+
 /* Success Screen */
 .success-screen { text-align: center; padding: 50px 20px 30px; animation: fadeUp .4s ease; }
 .success-icon {
@@ -551,6 +562,9 @@ table.data tbody tr:last-child td { border-bottom: none; }
 <!-- Toast Container -->
 <div class="toast-area" id="toast-area"></div>
 
+<!-- Slip Modal Container -->
+<div id="slip-root"></div>
+
 <!-- Modal Container -->
 <div id="modal-root"></div>
 
@@ -622,10 +636,11 @@ async function refreshData() {
   return allRecords;
 }
 
-async function addRecord(rec) {
-  const { error } = await sb.from('substitute_registrations').insert(rec);
-  if (error) { toast('提交失败：' + error.message, 'error'); return false; }
-  return true;
+async function addRecord(rec, force = false) {
+  // 通过数据库函数 add_registration 提交：自动查重（同一教师+班级+日期+午别+节次已有待办记录时返回 {duplicate:true}）
+  const { data, error } = await sb.rpc('add_registration', { p: rec, p_force: force });
+  if (error) { toast('提交失败：' + error.message, 'error'); return null; }
+  return data;
 }
 
 async function updateRecord(id, patch) {
@@ -739,13 +754,186 @@ btnSubmit.addEventListener('click', async () => {
     remark: fd.get('remark').trim()
   };
   btnSubmit.disabled = true;
-  const ok = await addRecord(record);
+  const res = await addRecord(record);
   btnSubmit.disabled = false;
-  if (!ok) return;
-  document.getElementById('register-form-area').classList.add('hidden');
-  document.getElementById('success-screen').classList.remove('hidden');
-  toast('登记成功！', 'success');
+  if (!res) return;
+  if (res.duplicate) {
+    confirmModal('可能重复提交', '该教师、班级在该日期午别节次已有待办登记，是否仍要提交？', async () => {
+      btnSubmit.disabled = true;
+      const res2 = await addRecord(record, true);
+      btnSubmit.disabled = false;
+      if (!res2 || res2.duplicate) return;
+      finishSubmit(res2);
+    });
+    return;
+  }
+  finishSubmit(res);
 });
+
+// 提交成功：生成电子代课单并弹出（含唯一编号，提醒老师保存/截图）
+function finishSubmit(row) {
+  const ticketId = genTicketId(row);
+  showSlipModal(row, ticketId);
+  toast('登记成功，已生成电子代课单', 'success');
+}
+
+// 唯一编号：DK-日期(8位)-数据库序号(至少4位)，如 DK-20260829-0001
+function genTicketId(row) {
+  const d = String(row.date || '').replace(/-/g, '');
+  const id = String(row.id || '').padStart(4, '0');
+  return 'DK-' + d + '-' + id;
+}
+
+// 电子代课单弹窗：展示画布生成的代课单图片 + 保存提醒 + 保存按钮
+function showSlipModal(row, ticketId) {
+  const img = drawSlipImage(row, ticketId);
+  const root = document.getElementById('slip-root');
+  root.innerHTML = `
+    <div class="modal-overlay" id="slip-overlay">
+      <div class="modal slip-modal">
+        <div class="slip-title">🎫 电子代课单已生成</div>
+        <div class="slip-remind">小字提醒：请长按下方代课单图片保存到相册，或直接截图保存，上课时出示作为凭证。每张代课单编号唯一，请勿重复提交。</div>
+        <img class="slip-img" src="${img}" alt="电子代课单 ${ticketId}">
+        <div class="slip-actions">
+          <a class="btn btn-primary" href="${img}" download="代课单-${ticketId}.png" style="text-decoration:none">保存图片</a>
+          <button class="btn btn-ghost" id="slip-close">继续登记</button>
+        </div>
+      </div>
+    </div>`;
+  document.getElementById('slip-close').addEventListener('click', closeSlipModal);
+  document.getElementById('slip-overlay').addEventListener('click', e => { if (e.target.id === 'slip-overlay') closeSlipModal(); });
+}
+
+function closeSlipModal() {
+  document.getElementById('slip-root').innerHTML = '';
+  form.reset();
+  weekdayInput.value = '';
+  escortToggle.dataset.val = '0';
+  escortToggle.classList.remove('on');
+  escortLabel.textContent = '否';
+}
+
+// 用 Canvas 绘制电子代课单图片（无外部依赖，微信长按可保存）
+function drawSlipImage(row, ticketId) {
+  const W = 720, H = 1080;
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const ctx = c.getContext('2d');
+  const font = '"Microsoft YaHei","PingFang SC","Noto Sans CJK SC",sans-serif';
+
+  // 背景与边框
+  ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, W, H);
+  ctx.strokeStyle = '#0f6b5c'; ctx.lineWidth = 4;
+  ctx.strokeRect(22, 22, W - 44, H - 44);
+
+  // 顶部标题栏
+  ctx.fillStyle = '#0f6b5c';
+  ctx.fillRect(22, 22, W - 44, 118);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 54px ' + font;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('代  课  单', W / 2, 80);
+  ctx.font = '22px ' + font;
+  ctx.fillStyle = '#eaf4f1';
+  ctx.fillText('代课登记系统 · 电子凭证', W / 2, 128);
+
+  // 编号徽章
+  ctx.font = 'bold 26px ' + font;
+  ctx.fillStyle = '#0f6b5c';
+  const idText = '编号：' + ticketId;
+  const idW = ctx.measureText(idText).width + 44;
+  ctx.fillStyle = '#eef6f3';
+  roundRect(ctx, (W - idW) / 2, 158, idW, 52, 26); ctx.fill();
+  ctx.strokeStyle = '#0f6b5c'; ctx.lineWidth = 2;
+  roundRect(ctx, (W - idW) / 2, 158, idW, 52, 26); ctx.stroke();
+  ctx.fillStyle = '#0f6b5c';
+  ctx.fillText(idText, W / 2, 185);
+
+  // 信息格子
+  const items = [
+    ['原任教师', row.original_teacher || '-'], ['代课教师', row.substitute_teacher || '-'],
+    ['事由', row.reason || '-'], ['课程', row.subject || '-'],
+    ['日期', row.date || '-'], ['星期', (row.weekday || '') ? '星期' + row.weekday : '-'],
+    ['午别', row.period || '-'], ['节次', row.section || '-'],
+    ['班级', row.class_name || '-'], ['路队', String(row.escort) === '1' ? '是' : '否'],
+  ];
+  const left = 66, top = 244, cw = 286, ch = 86, gap = 16;
+  ctx.textAlign = 'left';
+  items.forEach((it, i) => {
+    const col = i % 2, r = Math.floor(i / 2);
+    const x = left + col * (cw + gap), y = top + r * (ch + gap);
+    ctx.fillStyle = '#f7faf8';
+    roundRect(ctx, x, y, cw, ch, 10); ctx.fill();
+    ctx.strokeStyle = '#e2eae5'; ctx.lineWidth = 1;
+    roundRect(ctx, x, y, cw, ch, 10); ctx.stroke();
+    ctx.fillStyle = '#8a958e'; ctx.font = '20px ' + font;
+    ctx.fillText(it[0], x + 16, y + 28);
+    ctx.fillStyle = '#22302b'; ctx.font = 'bold 28px ' + font;
+    ctx.fillText(clip(ctx, it[1], x + 16, cw - 32, 1), x + 16, y + 62);
+  });
+
+  // 备注（整行）
+  const remarkY = top + 5 * (ch + gap);
+  ctx.fillStyle = '#f7faf8';
+  roundRect(ctx, left, remarkY, cw * 2 + gap, 74, 10); ctx.fill();
+  ctx.strokeStyle = '#e2eae5'; ctx.lineWidth = 1;
+  roundRect(ctx, left, remarkY, cw * 2 + gap, 74, 10); ctx.stroke();
+  ctx.fillStyle = '#8a958e'; ctx.font = '20px ' + font;
+  ctx.fillText('备注', left + 16, remarkY + 26);
+  ctx.fillStyle = '#22302b'; ctx.font = '24px ' + font;
+  ctx.fillText(clip(ctx, row.remark || '无', left + 16, cw * 2 + gap - 32, 1), left + 16, remarkY + 56);
+
+  // 提交时间
+  ctx.fillStyle = '#5f6b64'; ctx.font = '22px ' + font;
+  ctx.textAlign = 'right';
+  ctx.fillText('提交时间：' + fmtTime(row.created_at), W - 66, remarkY + 112);
+
+  // 红章
+  const sx = 620, sy = 900;
+  ctx.save();
+  ctx.translate(sx, sy); ctx.rotate(-0.3);
+  ctx.strokeStyle = '#c0392b'; ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.arc(0, 0, 58, 0, Math.PI * 2); ctx.stroke();
+  ctx.fillStyle = '#c0392b'; ctx.font = 'bold 30px ' + font;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('已受理', 0, -8);
+  ctx.font = '20px ' + font;
+  ctx.fillText('代课登记系统', 0, 30);
+  ctx.restore();
+
+  // 底部说明
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#8a958e'; ctx.font = '22px ' + font;
+  ctx.fillText('本代课单由系统自动生成，编号唯一，请妥善保存。', W / 2, 1008);
+  ctx.fillText('上课时请向班级出示本单作为凭证。', W / 2, 1040);
+
+  return c.toDataURL('image/png');
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+// 文本超长时截断为单行（加省略号）
+function clip(ctx, text, x, maxW, lineCount) {
+  let t = String(text == null ? '' : text);
+  while (ctx.measureText(t).width > maxW && t.length > 1) t = t.slice(0, -1);
+  return t.length < String(text).length ? t.slice(0, -1) + '…' : t;
+}
+
+function fmtTime(iso) {
+  if (!iso) return '-';
+  const d = new Date(iso);
+  if (isNaN(d)) return '-';
+  const p = n => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
 
 // 重置
 document.getElementById('btn-reset').addEventListener('click', () => {
