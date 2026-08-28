@@ -469,7 +469,7 @@ table.data tbody tr:last-child td { border-bottom: none; }
     <div class="form-body">
       <div class="field">
         <label class="field-label">账号（固定）</label>
-        <input class="input" id="login-email" type="email" value="616615481@qq.com" readonly style="background:var(--bg-grain);color:var(--text-muted)">
+        <input class="input" id="login-email" type="text" value="jiaodaochu" readonly style="background:var(--bg-grain);color:var(--text-muted)">
       </div>
       <div class="field">
         <label class="field-label">密码</label>
@@ -671,11 +671,12 @@ document.querySelectorAll('.nav-tab').forEach(t => t.addEventListener('click', (
 window.addEventListener('hashchange', () => { const r = location.hash.slice(1) || 'register'; navigate(r); });
 
 /* ================= 登录表单 ================= */
+const LOGIN_EMAIL = '616615481@qq.com'; // 固定账号 jiaodaochu 对应的真实登录邮箱
 async function doLogin() {
-  const email = document.getElementById('login-email').value.trim();
+  const account = document.getElementById('login-email').value.trim();
   const password = document.getElementById('login-password').value;
-  if (!email || !password) { toast('请输入邮箱和密码', 'error'); return; }
-  const { error } = await sb.auth.signInWithPassword({ email, password });
+  if (!account || !password) { toast('请输入账号和密码', 'error'); return; }
+  const { error } = await sb.auth.signInWithPassword({ email: LOGIN_EMAIL, password });
   if (error) { toast('登录失败：' + error.message, 'error'); return; }
   document.getElementById('login-password').value = '';
   toast('登录成功', 'success');
