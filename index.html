@@ -792,11 +792,10 @@ function showSlipModal(row, ticketId) {
     <div class="modal-overlay" id="slip-overlay">
       <div class="modal slip-modal">
         <div class="slip-title">🎫 电子代课单已生成</div>
-        <div class="slip-remind">小字提醒：请长按下方代课单图片保存到相册，或直接截图保存，上课时出示作为凭证。每张代课单编号唯一，请勿重复提交。</div>
+        <div class="slip-remind">小字提醒：请截图保存本代课单。每张代课单编号唯一，请勿重复提交。</div>
         <img class="slip-img" src="${img}" alt="电子代课单 ${ticketId}">
         <div class="slip-actions">
-          <a class="btn btn-primary" href="${img}" download="代课单-${ticketId}.png" style="text-decoration:none">保存图片</a>
-          <button class="btn btn-ghost" id="slip-close">继续登记</button>
+          <button class="btn btn-primary" id="slip-close" style="width:100%">继续登记</button>
         </div>
       </div>
     </div>`;
@@ -904,8 +903,7 @@ function drawSlipImage(row, ticketId) {
   // 底部说明
   ctx.textAlign = 'center';
   ctx.fillStyle = '#8a958e'; ctx.font = '22px ' + font;
-  ctx.fillText('本代课单由系统自动生成，编号唯一，请妥善保存。', W / 2, 1008);
-  ctx.fillText('上课时请向班级出示本单作为凭证。', W / 2, 1040);
+  ctx.fillText('本代课单由系统自动生成，编号唯一，请妥善保存。', W / 2, 1024);
 
   return c.toDataURL('image/png');
 }
