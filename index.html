@@ -441,7 +441,7 @@ table.data tbody tr:last-child td { border-bottom: none; }
   <div id="sched-step-table" class="hidden">
     <div class="info-banner" style="margin-bottom:14px">
       <span class="info-icon">💡</span>
-      <span>点击课表中的课程，为每节课选择代课日期后加入清单；可继续点击其他课程。全部选好后点「填写替课信息」统一提交，自动生成电子代课单。</span>
+      <span>点击课表中的课程，为每节课选择代课日期后加入清单；清单里每节课需单独填写代课教师（可点🔍自动检索该时段没课的老师并查看TA的课表）。全部填好后点「填写替课信息」统一提交。</span>
     </div>
     <div class="card form-card" style="margin-bottom:16px">
       <div class="form-body" style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;padding-bottom:16px">
@@ -604,6 +604,9 @@ table.data tbody tr:last-child td { border-bottom: none; }
 
 <!-- 课程日期选择弹窗容器 -->
 <div id="date-root"></div>
+
+<!-- 空闲老师检索弹窗容器 -->
+<div id="avail-root"></div>
 
 <!-- Modal Container -->
 <div id="modal-root"></div>
@@ -915,9 +918,108 @@ function renderSelected() {
   schedSelectedList.innerHTML = sorted.map(c => {
     const pi = periodInfo(c.period);
     const dateWd = weekdayNames[new Date(c.date).getDay()];
-    const label = c.date + '（周' + dateWd + '） ' + weekdayCn[c.weekday] + ' ' + pi.period + pi.section + ' · ' + esc(c.class_name || c.subject) + (c.class_name ? ' · ' + esc(c.subject) : '');
-    return `<div class="sched-sel-item"><span class="si-info">${label}</span><span class="si-rm" onclick="removeCell(${c.weekday},${c.period})">移除</span></div>`;
+    const missing = !c.teacher;
+    return `<div class="sched-sel-item" style="flex-wrap:wrap;align-items:center">
+      <span class="si-info" style="flex:1;min-width:210px">${c.date}（周${dateWd}） ${weekdayCn[c.weekday]} ${pi.period}${pi.section} · ${esc(c.class_name || c.subject)}${c.class_name ? ' · ' + esc(c.subject) : ''}</span>
+      <span style="display:flex;gap:6px;align-items:center;flex:1;min-width:230px;flex-wrap:wrap">
+        <input class="input" list="teacher-list" placeholder="代课教师（必填）" value="${esc(c.teacher || '')}" oninput="cartTeacher(${c.weekday},${c.period},this.value)" style="min-width:150px;flex:1${missing ? ';border-color:var(--danger)' : ''}">
+        <button class="btn btn-ghost btn-sm" onclick="findTeacher(${c.weekday},${c.period})">🔍 找老师</button>
+        <span class="si-rm" onclick="removeCell(${c.weekday},${c.period})">移除</span>
+      </span>
+    </div>`;
   }).join('');
+}
+
+// 记录清单中某节课的代课教师（输入时实时保存）
+function cartTeacher(w, p, val) {
+  const it = selectedCells.find(c => c.weekday === w && c.period === p);
+  if (it) it.teacher = val;
+}
+
+// ================= 空闲老师检索 =================
+let schedAllCache = [];   // 全部课表缓存
+let availState = null;    // 上次检索结果 {wd, p, free, dayMap}
+
+async function findTeacher(w, p) {
+  const it = selectedCells.find(c => c.weekday === w && c.period === p);
+  if (!it) return;
+  const wd = new Date(it.date).getDay();
+  const root = document.getElementById('avail-root');
+  root.innerHTML = '<div class="modal-overlay" id="avail-overlay"><div class="modal sub-modal"><div class="modal-title">查找空闲老师</div><div class="sub-list"><div class="sub-list-item">正在检索…</div></div></div></div>';
+  const { data, error } = await sb.from('teacher_schedules').select('teacher_name, weekday, period, class_name, subject');
+  if (error) { root.innerHTML = ''; toast('检索失败：' + error.message, 'error'); return; }
+  schedAllCache = data || [];
+  const all = schedAllCache;
+  const busy = new Set(all.filter(r => r.weekday === wd && r.period === p).map(r => r.teacher_name));
+  const teachers = [...new Set(all.map(r => r.teacher_name))].sort();
+  const free = teachers.filter(t => !busy.has(t));
+  const dayMap = {};
+  all.forEach(r => {
+    if (r.weekday !== wd) return;
+    if (!dayMap[r.teacher_name]) dayMap[r.teacher_name] = [];
+    dayMap[r.teacher_name].push(r);
+  });
+  availState = { wd, p, free, dayMap };
+  renderAvailList(root);
+}
+
+function renderAvailList(root) {
+  const { wd, p, free, dayMap } = availState;
+  const pi = periodInfo(p);
+  root.innerHTML = `
+    <div class="modal-overlay" id="avail-overlay">
+      <div class="modal sub-modal" style="max-height:88vh;overflow-y:auto">
+        <div class="modal-title">${weekdayCn[wd]} ${pi.period}${pi.section} 没课的老师（${free.length} 人）</div>
+        <div id="avail-list"></div>
+      </div>
+    </div>`;
+  const listEl = document.getElementById('avail-list');
+  listEl.innerHTML = free.map(t => {
+    const dayCourses = (dayMap[t] || []).map(r => periodShort(r.period) + (r.class_name ? ' ' + esc(r.class_name) + esc(r.subject) : ' ' + esc(r.subject))).join('、') || '当天无课';
+    return `<div class="sched-sel-item" style="flex-wrap:wrap">
+      <span class="si-info" style="flex:1;min-width:150px"><b>${esc(t)}</b> <span style="font-size:12px;color:var(--text-muted);font-weight:400">${dayCourses}</span></span>
+      <span style="display:flex;gap:6px">
+        <button class="btn btn-ghost btn-sm" onclick="viewAvailTimetable('${esc(t)}')">看课表</button>
+        <button class="btn btn-primary btn-sm" onclick="pickTeacher(${wd},${p},'${esc(t)}')">选TA代课</button>
+      </span>
+    </div>`;
+  }).join('') || '<div class="sub-list-item">该时段所有老师都有课，暂时没有空闲老师</div>';
+  document.getElementById('avail-overlay').addEventListener('click', e => { if (e.target.id === 'avail-overlay') root.innerHTML = ''; });
+}
+
+function periodShort(p) {
+  return (p <= 3 ? '上午' : '下午') + (p <= 3 ? '第' + p + '节' : '第' + (p - 3) + '节');
+}
+
+// 查看某位老师的完整周课表（整页展示，不做下拉截断）
+function viewAvailTimetable(name) {
+  const teacherRows = schedAllCache.filter(r => r.teacher_name === name);
+  const root = document.getElementById('avail-root');
+  let html = '<div class="modal-overlay" id="avail-overlay"><div class="modal sub-modal" style="max-height:88vh;overflow-y:auto">';
+  html += '<div class="modal-title">' + esc(name) + ' 的完整周课表</div>';
+  html += '<table class="sched-table" style="min-width:0;border-spacing:3px"><thead><tr><th></th><th>周一</th><th>周二</th><th>周三</th><th>周四</th><th>周五</th></tr></thead><tbody>';
+  for (let p = 1; p <= 6; p++) {
+    html += '<tr><td class="sched-label"><b>' + (p <= 3 ? '上午' : '下午') + '</b>第' + (p <= 3 ? p : p - 3) + '节</td>';
+    for (let w = 1; w <= 5; w++) {
+      const c = teacherRows.find(r => r.weekday === w && r.period === p);
+      html += '<td>' + (c ? '<div class="sched-cell" style="min-height:44px;font-size:12px;padding:4px">' + esc(c.class_name ? c.class_name + ' ' + c.subject : c.subject) + '</div>' : '<div class="sched-cell empty" style="min-height:44px"></div>') + '</td>';
+    }
+    html += '</tr>';
+  }
+  html += '</tbody></table>';
+  html += '<div style="margin-top:10px;text-align:center"><button class="btn btn-ghost btn-sm" onclick="renderAvailList(document.getElementById(\'avail-root\'))">← 返回空闲老师列表</button></div>';
+  html += '</div></div>';
+  root.innerHTML = html;
+  document.getElementById('avail-overlay').addEventListener('click', e => { if (e.target.id === 'avail-overlay') root.innerHTML = ''; });
+}
+
+// 选定某位老师为这节课的代课教师
+function pickTeacher(w, p, name) {
+  const it = selectedCells.find(c => c.weekday === w && c.period === p);
+  if (it) it.teacher = name;
+  document.getElementById('avail-root').innerHTML = '';
+  renderSelected();
+  toast('已选择代课教师：' + name, 'success');
 }
 
 btnClearSelected.addEventListener('click', () => { selectedCells = []; renderGrid(); renderSelected(); });
@@ -932,6 +1034,12 @@ btnBackName.addEventListener('click', () => {
 // 第二步：填写替课信息（弹窗）
 btnFillSub.addEventListener('click', () => {
   if (selectedCells.length === 0) { toast('请先在课表中添加需要代课的课程', 'error'); return; }
+  const missing = selectedCells.filter(c => !c.teacher);
+  if (missing.length > 0) {
+    toast('还有 ' + missing.length + ' 节课未填代课教师，请逐个填写或点击🔍查找空闲老师', 'error');
+    renderSelected();
+    return;
+  }
   showSubDialog();
 });
 
@@ -940,18 +1048,14 @@ function showSubDialog() {
   const listHtml = sorted.map(c => {
     const pi = periodInfo(c.period);
     const dateWd = weekdayNames[new Date(c.date).getDay()];
-    return `<div class="sub-list-item">${c.date}（周${dateWd}） ${weekdayCn[c.weekday]} ${pi.period}${pi.section} · ${esc(c.class_name || '—')} · ${esc(c.subject)}</div>`;
+    return `<div class="sub-list-item">${c.date}（周${dateWd}） ${weekdayCn[c.weekday]} ${pi.period}${pi.section} · ${esc(c.class_name || '—')} · ${esc(c.subject)} → 代课：<b>${esc(c.teacher)}</b></div>`;
   }).join('');
   const root = document.getElementById('sub-root');
   root.innerHTML = `
     <div class="modal-overlay" id="sub-overlay">
       <div class="modal sub-modal">
-        <div class="modal-title">填写替课信息</div>
+        <div class="modal-title">确认替课信息</div>
         <div class="sub-list">${listHtml}</div>
-        <div class="field" style="text-align:left">
-          <label class="field-label">代课教师 <span class="req">*</span></label>
-          <input class="input" id="sub-teacher" list="teacher-list" placeholder="请输入代课教师姓名" autocomplete="off">
-        </div>
         <div class="field" style="text-align:left">
           <label class="field-label">事由 <span class="req">*</span></label>
           <select class="select" id="sub-reason">
@@ -990,17 +1094,21 @@ function showSubDialog() {
 }
 
 async function submitSub() {
-  const teacher = document.getElementById('sub-teacher').value.trim();
   const reason = document.getElementById('sub-reason').value;
   const remark = document.getElementById('sub-remark').value.trim();
   const escort = document.getElementById('sub-escort').dataset.val;
-  if (!teacher) { toast('请输入代课教师姓名', 'error'); return; }
   if (!reason) { toast('请选择事由', 'error'); return; }
+  if (selectedCells.some(c => !c.teacher)) {
+    toast('存在未填代课教师的课程，请返回清单补填', 'error');
+    document.getElementById('sub-root').innerHTML = '';
+    renderSelected();
+    return;
+  }
   const records = selectedCells.map(c => {
     const pi = periodInfo(c.period);
     return {
       original_teacher: currentTeacher,
-      substitute_teacher: teacher,
+      substitute_teacher: c.teacher,
       reason: reason,
       date: c.date,
       weekday: weekdayNames[new Date(c.date).getDay()],
