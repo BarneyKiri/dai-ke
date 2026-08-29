@@ -9,6 +9,8 @@
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700;900&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
 <!-- Supabase JS SDK（用于连接云端数据库） -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<!-- SheetJS（用于导出 Excel） -->
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <style>
 /* ===== Design Tokens ===== */
 :root {
@@ -298,6 +300,60 @@ table.data tbody tr:last-child td { border-bottom: none; }
 }
 .info-banner .info-icon { font-size: 18px; flex-shrink: 0; margin-top: 1px; }
 
+/* ===== 课表登记 ===== */
+.sched-table { width: 100%; border-collapse: separate; border-spacing: 5px; min-width: 640px; }
+.sched-table th {
+  font-size: 13px; color: var(--text-muted); font-weight: 500;
+  padding: 6px 4px; text-align: center;
+}
+.sched-table td { text-align: center; vertical-align: middle; padding: 0; }
+.sched-label {
+  font-size: 12px; color: var(--text-muted); white-space: nowrap;
+  padding: 0 6px;
+}
+.sched-label b { display: block; color: var(--primary-dark); font-size: 13px; }
+.sched-cell {
+  width: 100%; min-height: 62px; padding: 6px 4px; border-radius: 10px;
+  background: var(--surface-2); border: 1.5px solid var(--border);
+  font-size: 13px; line-height: 1.35; color: var(--text);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  transition: all .15s ease; text-align: center;
+}
+.sched-cell .sc-sub { font-weight: 700; color: var(--primary-dark); }
+.sched-cell .sc-cls { font-size: 12px; color: var(--text-muted); }
+.sched-cell:hover { border-color: var(--primary); background: var(--primary-light); }
+.sched-cell.selected {
+  background: var(--primary); border-color: var(--primary-dark);
+  color: #fff; box-shadow: 0 2px 10px rgba(21,94,84,.35);
+}
+.sched-cell.selected .sc-sub { color: #fff; }
+.sched-cell.selected .sc-cls { color: #e0f0ed; }
+.sched-cell.empty { opacity: .35; pointer-events: none; background: transparent; border-style: dashed; }
+.sched-cell.today-col { border-color: var(--accent); }
+.sched-selected-list { display: flex; flex-direction: column; gap: 8px; }
+.sched-sel-item {
+  display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  background: var(--primary-light); border: 1px solid #c5ded9; border-radius: 10px;
+  padding: 8px 12px; font-size: 13px;
+}
+.sched-sel-item .si-info { color: var(--primary-dark); font-weight: 500; }
+.sched-sel-item .si-rm { color: var(--danger); font-size: 12px; cursor: pointer; font-weight: 500; }
+
+/* 替课填写弹窗 */
+.sub-modal { max-width: 460px; }
+.sub-list { max-height: 180px; overflow-y: auto; margin-bottom: 14px; border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+.sub-list-item { font-size: 13px; color: var(--text-muted); line-height: 1.7; }
+
+/* 管理后台 · 每日统计 */
+.stats-card { margin-top: 18px; }
+.stats-datebar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+.stats-chips { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.chip {
+  background: var(--primary-light); color: var(--primary-dark); border-radius: 20px;
+  padding: 6px 14px; font-size: 13px; font-weight: 500;
+}
+.chip b { font-size: 15px; }
+
 /* ===== Animations ===== */
 @keyframes fadeUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
@@ -343,7 +399,7 @@ table.data tbody tr:last-child td { border-bottom: none; }
       </div>
     </div>
     <nav class="nav-tabs">
-      <button class="nav-tab active" data-route="register">登记</button>
+      <button class="nav-tab active" data-route="schedule">课表登记</button>
       <button class="nav-tab" data-route="admin">管理后台</button>
     </nav>
     <div class="user-area hidden" id="user-area">
@@ -358,113 +414,58 @@ table.data tbody tr:last-child td { border-bottom: none; }
   ⚠️ 尚未配置 Supabase 项目信息：请按《部署指南》在代码顶部填写 SUPABASE_URL 和 SUPABASE_ANON_KEY 后重新上传本文件
 </div>
 
-<!-- ===== Register View ===== -->
-<main id="view-register" class="container">
+<!-- ===== 课表登记 View ===== -->
+<main id="view-schedule" class="container">
   <div class="page-header">
-    <h1 class="page-title">代课登记</h1>
-    <p class="page-desc">填写代课信息并提交，提交后管理员可在后台查看</p>
+    <h1 class="page-title">课表代课登记</h1>
+    <p class="page-desc">输入姓名查看个人课表，勾选需要代课的课程，一次可提交多节课</p>
   </div>
 
-  <div class="info-banner">
-    <span class="info-icon">💡</span>
-    <span>请如实填写代课信息。带 <strong>*</strong> 为必填项；日期选择后星期自动匹配；提交成功后可继续登记下一条。</span>
-  </div>
-
-  <div id="register-form-area">
+  <!-- 第一步：输入姓名 -->
+  <div id="sched-step-name">
     <div class="card form-card">
-      <form id="reg-form" class="form-body" autocomplete="off">
-        <div class="form-grid">
-          <div class="field">
-            <label class="field-label">原任教师 <span class="req">*</span></label>
-            <input class="input" name="originalTeacher" placeholder="请输入姓名" required>
-          </div>
-          <div class="field">
-            <label class="field-label">代课教师 <span class="req">*</span></label>
-            <input class="input" name="substituteTeacher" placeholder="请输入姓名" required>
-          </div>
-          <div class="field">
-            <label class="field-label">事由 <span class="req">*</span></label>
-            <select class="select" name="reason" required>
-              <option value="">请选择</option>
-              <option>事假</option>
-              <option>病假</option>
-              <option>公差</option>
-              <option>培训</option>
-              <option>会议</option>
-              <option>其他</option>
-            </select>
-          </div>
-          <div class="field">
-            <label class="field-label">课程</label>
-            <select class="select" name="subject">
-              <option value="">请选择</option>
-              <option>语文</option><option>数学</option><option>英语</option>
-              <option>体育</option><option>美术</option><option>音乐</option>
-              <option>信息</option><option>科学</option><option>道德与法治</option>
-              <option>劳动</option><option>其他</option>
-            </select>
-          </div>
-          <div class="field">
-            <label class="field-label">日期 <span class="req">*</span></label>
-            <input class="input" type="date" name="date" id="date-input" required>
-          </div>
-          <div class="field">
-            <label class="field-label">星期</label>
-            <input class="input" name="weekday" id="weekday-input" readonly placeholder="自动匹配" style="background:var(--bg-grain);color:var(--text-muted)">
-          </div>
-          <div class="field">
-            <label class="field-label">午别 <span class="req">*</span></label>
-            <select class="select" name="period" required>
-              <option value="">请选择</option>
-              <option>上午</option>
-              <option>下午</option>
-            </select>
-          </div>
-          <div class="field">
-            <label class="field-label">节次 <span class="req">*</span></label>
-            <select class="select" name="section" required>
-              <option value="">请选择</option>
-              <option>第一节</option><option>第二节</option><option>第三节</option>
-              <option>第四节</option><option>第五节</option><option>第六节</option>
-              <option>第七节</option><option>第八节</option>
-            </select>
-          </div>
-          <div class="field">
-            <label class="field-label">班级 <span class="req">*</span></label>
-            <input class="input" name="className" placeholder="如：二11" required>
-          </div>
-          <div class="field full">
-            <label class="field-label">是否路队</label>
-            <div class="toggle-row">
-              <div class="toggle" id="escort-toggle" data-val="0">
-                <div class="toggle-knob"></div>
-              </div>
-              <span class="toggle-label" id="escort-label">否</span>
-              <span class="field-hint">放学路队是否由代课教师负责</span>
-            </div>
-          </div>
-          <div class="field full">
-            <label class="field-label">备注</label>
-            <textarea class="textarea" name="remark" placeholder="补充说明（选填）"></textarea>
-          </div>
+      <div class="form-body">
+        <div class="field">
+          <label class="field-label">教师姓名 <span class="req">*</span></label>
+          <input class="input" id="sched-teacher-input" list="teacher-list" placeholder="请输入或选择教师姓名" autocomplete="off">
+          <datalist id="teacher-list"></datalist>
         </div>
-      </form>
+      </div>
       <div class="form-actions">
-        <button type="button" class="btn btn-ghost" id="btn-reset">重置</button>
-        <button type="button" class="btn btn-primary" id="btn-submit">提交登记</button>
+        <button type="button" class="btn btn-primary" id="btn-load-schedule" style="width:100%">查看我的课表</button>
       </div>
     </div>
   </div>
 
-  <!-- Success Screen (hidden by default) -->
-  <div id="success-screen" class="card hidden">
-    <div class="success-screen">
-      <div class="success-icon">✓</div>
-      <h2 class="success-title">登记成功</h2>
-      <p class="success-desc">代课信息已提交到云端，管理员可在后台查看</p>
-      <div style="display:flex;gap:10px;justify-content:center">
-        <button class="btn btn-ghost" id="btn-view-admin">查看后台</button>
-        <button class="btn btn-primary" id="btn-continue">继续登记</button>
+  <!-- 第二步：周课表 -->
+  <div id="sched-step-table" class="hidden">
+    <div class="info-banner" style="margin-bottom:14px">
+      <span class="info-icon">💡</span>
+      <span>点击课表中的课程即可选中（可多选），选好后点下方「填写替课信息」。请先选择代课日期（默认今天），提交后会自动生成电子代课单。</span>
+    </div>
+    <div class="card form-card" style="margin-bottom:16px">
+      <div class="form-body" style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;padding-bottom:16px">
+        <div class="field" style="flex:1;min-width:180px;margin:0">
+          <label class="field-label">教师：<strong id="sched-teacher-name"></strong></label>
+        </div>
+        <div class="field" style="flex:1;min-width:190px;margin:0">
+          <label class="field-label">代课日期 <span class="req">*</span></label>
+          <input class="input" type="date" id="sched-date">
+        </div>
+      </div>
+    </div>
+    <div class="card" style="padding:14px 10px;overflow-x:auto">
+      <table class="sched-table" id="sched-grid"></table>
+    </div>
+    <div class="card" style="margin-top:16px;padding:16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px">
+        <strong>已选课程（<span id="sched-selected-count">0</span> 节）</strong>
+        <button class="btn btn-ghost btn-sm" id="btn-clear-selected">清空选择</button>
+      </div>
+      <div id="sched-selected-list" class="sched-selected-list"></div>
+      <div class="form-actions" style="padding:0;margin-top:14px">
+        <button class="btn btn-ghost" id="btn-back-name">← 换个老师</button>
+        <button class="btn btn-primary" id="btn-fill-sub">填写替课信息</button>
       </div>
     </div>
   </div>
@@ -524,6 +525,7 @@ table.data tbody tr:last-child td { border-bottom: none; }
         <option value="">全部教师</option>
       </select>
       <button class="btn btn-accent btn-sm" id="btn-export">导出 CSV</button>
+      <button class="btn btn-accent btn-sm" id="btn-export-xlsx">导出 Excel</button>
       <button class="btn btn-ghost btn-sm" id="btn-clear-all" style="color:var(--danger)">清空数据</button>
     </div>
 
@@ -556,6 +558,29 @@ table.data tbody tr:last-child td { border-bottom: none; }
         <p>暂无登记记录</p>
       </div>
     </div>
+
+    <!-- 按日期统计 -->
+    <div class="card stats-card">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px">
+        <strong style="font-size:16px;color:var(--primary-dark)">按日期统计</strong>
+        <div class="stats-datebar" style="margin:0">
+          <input class="input" type="date" id="stats-date" style="max-width:180px">
+          <button class="btn btn-ghost btn-sm" id="btn-stats-clear">显示全部</button>
+        </div>
+      </div>
+      <div class="stats-chips" id="stats-chips"></div>
+      <div class="table-scroll">
+        <table class="data" id="stats-table">
+          <thead>
+            <tr>
+              <th>日期</th><th>午别节次</th><th>班级</th><th>科目</th>
+              <th>原任教师</th><th>代课教师</th><th>路队</th><th>状态</th>
+            </tr>
+          </thead>
+          <tbody id="stats-body"></tbody>
+        </table>
+      </div>
+    </div>
   </div>
 </main>
 
@@ -564,6 +589,9 @@ table.data tbody tr:last-child td { border-bottom: none; }
 
 <!-- Slip Modal Container -->
 <div id="slip-root"></div>
+
+<!-- 替课信息填写弹窗容器 -->
+<div id="sub-root"></div>
 
 <!-- Modal Container -->
 <div id="modal-root"></div>
@@ -663,27 +691,27 @@ async function clearAllRecords() {
 
 /* ================= 路由 ================= */
 async function navigate(route) {
-  const reg = document.getElementById('view-register');
+  const sched = document.getElementById('view-schedule');
   const login = document.getElementById('view-login');
   const admin = document.getElementById('view-admin');
   document.querySelectorAll('.nav-tab').forEach(t => t.classList.toggle('active', t.dataset.route === route));
 
   if (route === 'admin') {
-    if (!configured) { toast('请先在代码顶部完成 Supabase 配置', 'error'); navigate('register'); return; }
-    reg.classList.add('hidden'); login.classList.add('hidden'); admin.classList.remove('hidden');
+    if (!configured) { toast('请先在代码顶部完成 Supabase 配置', 'error'); navigate('schedule'); return; }
+    sched.classList.add('hidden'); login.classList.add('hidden'); admin.classList.remove('hidden');
     if (!session) { admin.classList.add('hidden'); login.classList.remove('hidden'); }
     else { await renderAdmin(); }
   } else if (route === 'login') {
-    reg.classList.add('hidden'); admin.classList.add('hidden'); login.classList.remove('hidden');
+    sched.classList.add('hidden'); admin.classList.add('hidden'); login.classList.remove('hidden');
   } else {
-    login.classList.add('hidden'); admin.classList.add('hidden'); reg.classList.remove('hidden');
+    login.classList.add('hidden'); admin.classList.add('hidden'); sched.classList.remove('hidden');
   }
   location.hash = route;
   window.scrollTo(0, 0);
 }
 
 document.querySelectorAll('.nav-tab').forEach(t => t.addEventListener('click', () => navigate(t.dataset.route)));
-window.addEventListener('hashchange', () => { const r = location.hash.slice(1) || 'register'; navigate(r); });
+window.addEventListener('hashchange', () => { const r = location.hash.slice(1) || 'schedule'; navigate(r); });
 
 /* ================= 登录表单 ================= */
 const LOGIN_EMAIL = '616615481@qq.com'; // 固定账号 jiaodaochu 对应的真实登录邮箱
@@ -708,72 +736,273 @@ document.getElementById('btn-logout').addEventListener('click', async () => {
   navigate('register');
 });
 
-/* ================= 登记表单逻辑 ================= */
-const form = document.getElementById('reg-form');
-const escortToggle = document.getElementById('escort-toggle');
-const escortLabel = document.getElementById('escort-label');
-const dateInput = document.getElementById('date-input');
-const weekdayInput = document.getElementById('weekday-input');
-const btnSubmit = document.getElementById('btn-submit');
+/* ================= 课表登记逻辑 ================= */
+const schedStepName = document.getElementById('sched-step-name');
+const schedStepTable = document.getElementById('sched-step-table');
+const schedTeacherInput = document.getElementById('sched-teacher-input');
+const teacherListEl = document.getElementById('teacher-list');
+const btnLoadSchedule = document.getElementById('btn-load-schedule');
+const schedTeacherName = document.getElementById('sched-teacher-name');
+const schedDate = document.getElementById('sched-date');
+const schedGrid = document.getElementById('sched-grid');
+const schedSelectedCount = document.getElementById('sched-selected-count');
+const schedSelectedList = document.getElementById('sched-selected-list');
+const btnClearSelected = document.getElementById('btn-clear-selected');
+const btnBackName = document.getElementById('btn-back-name');
+const btnFillSub = document.getElementById('btn-fill-sub');
 
-// 路队开关
-escortToggle.addEventListener('click', () => {
-  const val = escortToggle.dataset.val === '1' ? '0' : '1';
-  escortToggle.dataset.val = val;
-  escortToggle.classList.toggle('on', val === '1');
-  escortLabel.textContent = val === '1' ? '是' : '否';
-});
+const weekdayNames = ['日', '一', '二', '三', '四', '五', '六'];
+const weekdayCn = ['', '周一', '周二', '周三', '周四', '周五'];
 
-// 日期自动匹配星期
-const weekdayNames = ['日','一','二','三','四','五','六'];
-dateInput.addEventListener('change', () => {
-  if (dateInput.value) {
-    const d = new Date(dateInput.value);
-    weekdayInput.value = weekdayNames[d.getDay()];
-  } else {
-    weekdayInput.value = '';
-  }
-});
+let teacherNames = [];      // 所有教师名（用于输入提示）
+let currentSchedule = [];   // 当前教师的课表
+let selectedCells = [];     // 勾选的课程
+let currentTeacher = '';
 
-// 提交登记（写入云端数据库，无需登录）
-btnSubmit.addEventListener('click', async () => {
+// 加载教师名单（输入框下拉提示）
+async function loadTeacherNames() {
+  const { data, error } = await sb.from('teacher_schedules').select('teacher_name');
+  if (error) { toast('读取教师名单失败：' + error.message, 'error'); return; }
+  teacherNames = [...new Set((data || []).map(r => r.teacher_name))].sort();
+  teacherListEl.innerHTML = teacherNames.map(t => `<option value="${esc(t)}"></option>`).join('');
+}
+
+function todayStr() {
+  const d = new Date();
+  // 周末默认跳到下周一，方便老师登记下周的课
+  const wd = d.getDay();
+  if (wd === 0) d.setDate(d.getDate() + 1);
+  if (wd === 6) d.setDate(d.getDate() + 2);
+  const p = n => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+}
+
+// 第一步：查看课表
+btnLoadSchedule.addEventListener('click', async () => {
+  const name = schedTeacherInput.value.trim();
+  if (!name) { toast('请输入教师姓名', 'error'); return; }
   if (!configured) { toast('请先在代码顶部完成 Supabase 配置', 'error'); return; }
-  if (!form.checkValidity()) { form.reportValidity(); return; }
-  const fd = new FormData(form);
-  const record = {
-    original_teacher: fd.get('originalTeacher').trim(),
-    substitute_teacher: fd.get('substituteTeacher').trim(),
-    reason: fd.get('reason'),
-    date: fd.get('date'),
-    weekday: weekdayInput.value,
-    period: fd.get('period'),
-    section: fd.get('section'),
-    class_name: fd.get('className').trim(),
-    subject: fd.get('subject'),
-    escort: escortToggle.dataset.val,
-    remark: fd.get('remark').trim()
-  };
-  btnSubmit.disabled = true;
-  const res = await addRecord(record);
-  btnSubmit.disabled = false;
+  const { data, error } = await sb.from('teacher_schedules')
+    .select('*').eq('teacher_name', name).order('weekday').order('period');
+  if (error) { toast('读取课表失败：' + error.message, 'error'); return; }
+  if (!data || data.length === 0) { toast('未找到「' + name + '」的课表，请检查姓名', 'error'); return; }
+  currentTeacher = name;
+  currentSchedule = data;
+  selectedCells = [];
+  schedTeacherName.textContent = name;
+  schedDate.value = todayStr();
+  schedStepName.classList.add('hidden');
+  schedStepTable.classList.remove('hidden');
+  renderGrid();
+  renderSelected();
+  window.scrollTo(0, 0);
+});
+
+// 渲染周课表（周一~周五 × 上午1-3节/下午1-3节）
+function renderGrid() {
+  const selWd = schedDate.value ? new Date(schedDate.value).getDay() : 0; // 1-5 为周一~周五
+  let html = '<thead><tr><th></th>';
+  for (let w = 1; w <= 5; w++) {
+    html += `<th>${weekdayCn[w]}${w === selWd ? '（选中）' : ''}</th>`;
+  }
+  html += '</tr></thead><tbody>';
+  for (let p = 1; p <= 6; p++) {
+    const half = p <= 3 ? '上午' : '下午';
+    const idx = p <= 3 ? p : p - 3;
+    html += `<tr><td class="sched-label"><b>${half}</b>第${idx}节</td>`;
+    for (let w = 1; w <= 5; w++) {
+      const cell = currentSchedule.find(c => c.weekday === w && c.period === p);
+      const selected = selectedCells.some(c => c.weekday === w && c.period === p);
+      if (!cell) {
+        html += '<td><div class="sched-cell empty"></div></td>';
+      } else {
+        html += `<td><button type="button" class="sched-cell${selected ? ' selected' : ''}${w === selWd ? ' today-col' : ''}" data-w="${w}" data-p="${p}" onclick="toggleCell(${w},${p})">
+          <span class="sc-sub">${esc(cell.subject)}</span>
+          <span class="sc-cls">${cell.class_name ? esc(cell.class_name) : '&nbsp;'}</span>
+        </button></td>`;
+      }
+    }
+    html += '</tr>';
+  }
+  html += '</tbody>';
+  schedGrid.innerHTML = html;
+}
+
+// 切换日期：清空已选（星期可能不匹配），并重新高亮该天的列
+schedDate.addEventListener('change', () => {
+  selectedCells = [];
+  renderGrid();
+  renderSelected();
+});
+
+// 勾选/取消课程
+function toggleCell(w, p) {
+  const idx = selectedCells.findIndex(c => c.weekday === w && c.period === p);
+  if (idx >= 0) {
+    selectedCells.splice(idx, 1);
+  } else {
+    const cell = currentSchedule.find(c => c.weekday === w && c.period === p);
+    if (cell) selectedCells.push({ weekday: w, period: p, subject: cell.subject, class_name: cell.class_name });
+  }
+  renderGrid();
+  renderSelected();
+}
+
+function removeCell(w, p) {
+  toggleCell(w, p);
+}
+
+function periodInfo(p) {
+  return { period: p <= 3 ? '上午' : '下午', section: p <= 3 ? '第' + p + '节' : '第' + (p - 3) + '节' };
+}
+
+function renderSelected() {
+  schedSelectedCount.textContent = selectedCells.length;
+  if (selectedCells.length === 0) {
+    schedSelectedList.innerHTML = '<div class="sub-list-item">尚未选择课程，请在上方课表中点击选择</div>';
+    return;
+  }
+  const sorted = [...selectedCells].sort((a, b) => a.weekday - b.weekday || a.period - b.period);
+  schedSelectedList.innerHTML = sorted.map(c => {
+    const pi = periodInfo(c.period);
+    const label = weekdayCn[c.weekday] + ' ' + pi.period + pi.section + ' · ' + esc(c.class_name || c.subject) + (c.class_name ? ' · ' + esc(c.subject) : '');
+    return `<div class="sched-sel-item"><span class="si-info">${label}</span><span class="si-rm" onclick="removeCell(${c.weekday},${c.period})">移除</span></div>`;
+  }).join('');
+}
+
+btnClearSelected.addEventListener('click', () => { selectedCells = []; renderGrid(); renderSelected(); });
+btnBackName.addEventListener('click', () => {
+  schedStepTable.classList.add('hidden');
+  schedStepName.classList.remove('hidden');
+  schedTeacherInput.value = currentTeacher;
+  selectedCells = [];
+  window.scrollTo(0, 0);
+});
+
+// 第二步：填写替课信息（弹窗）
+btnFillSub.addEventListener('click', () => {
+  if (selectedCells.length === 0) { toast('请先在课表中勾选需要代课的课程', 'error'); return; }
+  if (!schedDate.value) { toast('请选择代课日期', 'error'); return; }
+  showSubDialog();
+});
+
+function showSubDialog() {
+  const sorted = [...selectedCells].sort((a, b) => a.weekday - b.weekday || a.period - b.period);
+  const listHtml = sorted.map(c => {
+    const pi = periodInfo(c.period);
+    return `<div class="sub-list-item">${weekdayCn[c.weekday]} ${pi.period}${pi.section} · ${esc(c.class_name || '—')} · ${esc(c.subject)}</div>`;
+  }).join('');
+  const root = document.getElementById('sub-root');
+  root.innerHTML = `
+    <div class="modal-overlay" id="sub-overlay">
+      <div class="modal sub-modal">
+        <div class="modal-title">填写替课信息</div>
+        <div class="sub-list">${listHtml}</div>
+        <div class="field" style="text-align:left">
+          <label class="field-label">代课教师 <span class="req">*</span></label>
+          <input class="input" id="sub-teacher" list="teacher-list" placeholder="请输入代课教师姓名" autocomplete="off">
+        </div>
+        <div class="field" style="text-align:left">
+          <label class="field-label">事由 <span class="req">*</span></label>
+          <select class="select" id="sub-reason">
+            <option value="">请选择</option>
+            <option>事假</option><option>病假</option><option>公差</option>
+            <option>培训</option><option>会议</option><option>其他</option>
+          </select>
+        </div>
+        <div class="field" style="text-align:left">
+          <label class="field-label">是否路队</label>
+          <div class="toggle-row">
+            <div class="toggle" id="sub-escort" data-val="0"><div class="toggle-knob"></div></div>
+            <span class="toggle-label" id="sub-escort-label">否</span>
+          </div>
+        </div>
+        <div class="field" style="text-align:left">
+          <label class="field-label">备注</label>
+          <textarea class="textarea" id="sub-remark" placeholder="补充说明（选填）"></textarea>
+        </div>
+        <div class="modal-actions">
+          <button class="btn btn-ghost" id="sub-cancel">取消</button>
+          <button class="btn btn-primary" id="sub-confirm">提交</button>
+        </div>
+      </div>
+    </div>`;
+  document.getElementById('sub-escort').addEventListener('click', () => {
+    const t = document.getElementById('sub-escort');
+    const val = t.dataset.val === '1' ? '0' : '1';
+    t.dataset.val = val;
+    t.classList.toggle('on', val === '1');
+    document.getElementById('sub-escort-label').textContent = val === '1' ? '是' : '否';
+  });
+  document.getElementById('sub-cancel').addEventListener('click', () => root.innerHTML = '');
+  document.getElementById('sub-overlay').addEventListener('click', e => { if (e.target.id === 'sub-overlay') root.innerHTML = ''; });
+  document.getElementById('sub-confirm').addEventListener('click', submitSub);
+}
+
+async function submitSub() {
+  const teacher = document.getElementById('sub-teacher').value.trim();
+  const reason = document.getElementById('sub-reason').value;
+  const remark = document.getElementById('sub-remark').value.trim();
+  const escort = document.getElementById('sub-escort').dataset.val;
+  if (!teacher) { toast('请输入代课教师姓名', 'error'); return; }
+  if (!reason) { toast('请选择事由', 'error'); return; }
+  const date = schedDate.value;
+  const dateWd = new Date(date).getDay();
+  if (selectedCells.some(c => c.weekday !== dateWd)) {
+    toast('所选课程须与代课日期一致（' + date + ' 是星期' + weekdayNames[dateWd] + '），请重新勾选当天的课程', 'error');
+    return;
+  }
+  const weekday = weekdayNames[dateWd];
+  const records = selectedCells.map(c => {
+    const pi = periodInfo(c.period);
+    return {
+      original_teacher: currentTeacher,
+      substitute_teacher: teacher,
+      reason: reason,
+      date: date,
+      weekday: weekday,
+      period: pi.period,
+      section: pi.section,
+      class_name: c.class_name,
+      subject: c.subject,
+      escort: escort,
+      remark: remark
+    };
+  });
+  const btn = document.getElementById('sub-confirm');
+  btn.disabled = true;
+  const res = await addRecordBatch(records, false);
+  btn.disabled = false;
   if (!res) return;
   if (res.duplicate) {
-    confirmModal('可能重复提交', '该教师、班级在该日期午别节次已有待办登记，是否仍要提交？', async () => {
-      btnSubmit.disabled = true;
-      const res2 = await addRecord(record, true);
-      btnSubmit.disabled = false;
+    const conflicts = (res.conflicts || []).join('、');
+    confirmModal('可能重复提交', '以下课程已有待办登记：' + conflicts + '。是否仍要提交？', async () => {
+      const res2 = await addRecordBatch(records, true);
       if (!res2 || res2.duplicate) return;
-      finishSubmit(res2);
+      closeSubDialog();
+      finishSubmit(res2.rows);
     });
     return;
   }
-  finishSubmit(res);
-});
+  closeSubDialog();
+  finishSubmit(res.rows);
+}
 
-// 提交成功：生成电子代课单并弹出（含唯一编号，提醒老师保存/截图）
-function finishSubmit(row) {
-  const ticketId = genTicketId(row);
-  showSlipModal(row, ticketId);
+function closeSubDialog() {
+  document.getElementById('sub-root').innerHTML = '';
+}
+
+// 批量提交（逐课查重）
+async function addRecordBatch(records, force) {
+  const { data, error } = await sb.rpc('add_registration_batch', { p: records, p_force: force });
+  if (error) { toast('提交失败：' + error.message, 'error'); return null; }
+  return data;
+}
+
+// 提交成功：生成电子代课单并弹出（含唯一编号，提醒老师截图保存）
+function finishSubmit(rows) {
+  const ticketId = genTicketId(rows[0]);
+  showSlipModal(rows, ticketId);
   toast('登记成功，已生成电子代课单', 'success');
 }
 
@@ -784,15 +1013,16 @@ function genTicketId(row) {
   return 'DK-' + d + '-' + id;
 }
 
-// 电子代课单弹窗：展示画布生成的代课单图片 + 保存提醒 + 保存按钮
-function showSlipModal(row, ticketId) {
-  const img = drawSlipImage(row, ticketId);
+// 电子代课单弹窗：展示画布生成的代课单图片 + 截图提醒
+function showSlipModal(rows, ticketId) {
+  const img = drawSlipImage(rows, ticketId);
   const root = document.getElementById('slip-root');
+  const n = rows.length;
   root.innerHTML = `
     <div class="modal-overlay" id="slip-overlay">
       <div class="modal slip-modal">
         <div class="slip-title">🎫 电子代课单已生成</div>
-        <div class="slip-remind">小字提醒：请截图保存本代课单。每张代课单编号唯一，请勿重复提交。</div>
+        <div class="slip-remind">小字提醒：请截图保存本代课单（共 ${n} 节课）。每张代课单编号唯一，请勿重复提交。</div>
         <img class="slip-img" src="${img}" alt="电子代课单 ${ticketId}">
         <div class="slip-actions">
           <button class="btn btn-primary" id="slip-close" style="width:100%">继续登记</button>
@@ -805,16 +1035,19 @@ function showSlipModal(row, ticketId) {
 
 function closeSlipModal() {
   document.getElementById('slip-root').innerHTML = '';
-  form.reset();
-  weekdayInput.value = '';
-  escortToggle.dataset.val = '0';
-  escortToggle.classList.remove('on');
-  escortLabel.textContent = '否';
+  schedStepTable.classList.add('hidden');
+  schedStepName.classList.remove('hidden');
+  schedTeacherInput.value = '';
+  selectedCells = [];
+  window.scrollTo(0, 0);
 }
 
-// 用 Canvas 绘制电子代课单图片（无外部依赖，微信长按可保存）
-function drawSlipImage(row, ticketId) {
-  const W = 720, H = 1080;
+// 用 Canvas 绘制电子代课单图片（支持多节课，无外部依赖，微信长按可保存）
+function drawSlipImage(rows, ticketId) {
+  const first = rows[0];
+  const N = rows.length;
+  const W = 720;
+  const H = Math.max(1080, 700 + N * 74 + 320);
   const c = document.createElement('canvas');
   c.width = W; c.height = H;
   const ctx = c.getContext('2d');
@@ -838,7 +1071,6 @@ function drawSlipImage(row, ticketId) {
 
   // 编号徽章
   ctx.font = 'bold 26px ' + font;
-  ctx.fillStyle = '#0f6b5c';
   const idText = '编号：' + ticketId;
   const idW = ctx.measureText(idText).width + 44;
   ctx.fillStyle = '#eef6f3';
@@ -848,17 +1080,14 @@ function drawSlipImage(row, ticketId) {
   ctx.fillStyle = '#0f6b5c';
   ctx.fillText(idText, W / 2, 185);
 
-  // 信息格子
-  const items = [
-    ['原任教师', row.original_teacher || '-'], ['代课教师', row.substitute_teacher || '-'],
-    ['事由', row.reason || '-'], ['课程', row.subject || '-'],
-    ['日期', row.date || '-'], ['星期', (row.weekday || '') ? '星期' + row.weekday : '-'],
-    ['午别', row.period || '-'], ['节次', row.section || '-'],
-    ['班级', row.class_name || '-'], ['路队', String(row.escort) === '1' ? '是' : '否'],
+  // 基本信息（2×2）
+  const infoItems = [
+    ['原任教师', first.original_teacher], ['代课教师', first.substitute_teacher],
+    ['事由', first.reason], ['日期', first.date + (first.weekday ? ' 星期' + first.weekday : '')],
   ];
   const left = 66, top = 244, cw = 286, ch = 86, gap = 16;
   ctx.textAlign = 'left';
-  items.forEach((it, i) => {
+  infoItems.forEach((it, i) => {
     const col = i % 2, r = Math.floor(i / 2);
     const x = left + col * (cw + gap), y = top + r * (ch + gap);
     ctx.fillStyle = '#f7faf8';
@@ -867,28 +1096,59 @@ function drawSlipImage(row, ticketId) {
     roundRect(ctx, x, y, cw, ch, 10); ctx.stroke();
     ctx.fillStyle = '#8a958e'; ctx.font = '20px ' + font;
     ctx.fillText(it[0], x + 16, y + 28);
-    ctx.fillStyle = '#22302b'; ctx.font = 'bold 28px ' + font;
+    ctx.fillStyle = '#22302b'; ctx.font = 'bold 26px ' + font;
     ctx.fillText(clip(ctx, it[1], x + 16, cw - 32, 1), x + 16, y + 62);
   });
 
+  // 课程明细表
+  const listTop = top + 2 * (ch + gap) + 18;
+  ctx.fillStyle = '#5f6b64'; ctx.font = 'bold 24px ' + font;
+  ctx.fillText('代课课程明细（共 ' + N + ' 节）', left, listTop + 14);
+  const cols = [56, 208, 128, 128, 118];
+  const colX = [left, left + cols[0], left + cols[0] + cols[1], left + cols[0] + cols[1] + cols[2], left + cols[0] + cols[1] + cols[2] + cols[3]];
+  const headers = ['序号', '班级', '科目', '午别节次', '路队'];
+  const rowH = 52, headY = listTop + 40;
+  ctx.fillStyle = '#0f6b5c';
+  roundRect(ctx, left, headY, cols[0] + cols[1] + cols[2] + cols[3] + cols[4], rowH, 8); ctx.fill();
+  ctx.fillStyle = '#ffffff'; ctx.font = 'bold 22px ' + font;
+  headers.forEach((h, i) => {
+    ctx.textAlign = i === 0 ? 'center' : 'left';
+    ctx.fillText(h, i === 0 ? colX[i] + cols[i] / 2 : colX[i] + 12, headY + rowH / 2 + 2);
+  });
+  rows.forEach((r, i) => {
+    const y = headY + rowH + 6 + i * (rowH + 6);
+    ctx.fillStyle = i % 2 === 0 ? '#f7faf8' : '#ffffff';
+    roundRect(ctx, left, y, cols[0] + cols[1] + cols[2] + cols[3] + cols[4], rowH, 8); ctx.fill();
+    ctx.strokeStyle = '#e2eae5'; ctx.lineWidth = 1;
+    roundRect(ctx, left, y, cols[0] + cols[1] + cols[2] + cols[3] + cols[4], rowH, 8); ctx.stroke();
+    ctx.fillStyle = '#22302b'; ctx.font = '22px ' + font;
+    ctx.textAlign = 'center';
+    ctx.fillText(String(i + 1), colX[0] + cols[0] / 2, y + rowH / 2 + 2);
+    ctx.textAlign = 'left';
+    ctx.fillText(clip(ctx, r.class_name || '—', colX[1] + 12, cols[1] - 24, 1), colX[1] + 12, y + rowH / 2 + 2);
+    ctx.fillText(clip(ctx, r.subject || '—', colX[2] + 12, cols[2] - 24, 1), colX[2] + 12, y + rowH / 2 + 2);
+    ctx.fillText((r.period || '') + (r.section || ''), colX[3] + 12, y + rowH / 2 + 2);
+    ctx.fillText(String(r.escort) === '1' ? '是' : '否', colX[4] + 12, y + rowH / 2 + 2);
+  });
+
   // 备注（整行）
-  const remarkY = top + 5 * (ch + gap);
+  const remarkY = headY + rowH + 6 + N * (rowH + 6) + 8;
   ctx.fillStyle = '#f7faf8';
-  roundRect(ctx, left, remarkY, cw * 2 + gap, 74, 10); ctx.fill();
+  roundRect(ctx, left, remarkY, cw * 2 + gap, 66, 10); ctx.fill();
   ctx.strokeStyle = '#e2eae5'; ctx.lineWidth = 1;
-  roundRect(ctx, left, remarkY, cw * 2 + gap, 74, 10); ctx.stroke();
+  roundRect(ctx, left, remarkY, cw * 2 + gap, 66, 10); ctx.stroke();
   ctx.fillStyle = '#8a958e'; ctx.font = '20px ' + font;
   ctx.fillText('备注', left + 16, remarkY + 26);
-  ctx.fillStyle = '#22302b'; ctx.font = '24px ' + font;
-  ctx.fillText(clip(ctx, row.remark || '无', left + 16, cw * 2 + gap - 32, 1), left + 16, remarkY + 56);
+  ctx.fillStyle = '#22302b'; ctx.font = '22px ' + font;
+  ctx.fillText(clip(ctx, first.remark || '无', left + 16, cw * 2 + gap - 32, 1), left + 16, remarkY + 50);
 
   // 提交时间
   ctx.fillStyle = '#5f6b64'; ctx.font = '22px ' + font;
   ctx.textAlign = 'right';
-  ctx.fillText('提交时间：' + fmtTime(row.created_at), W - 66, remarkY + 112);
+  ctx.fillText('提交时间：' + fmtTime(first.created_at), W - 66, remarkY + 96);
 
   // 红章
-  const sx = 620, sy = 900;
+  const sx = 620, sy = H - 170;
   ctx.save();
   ctx.translate(sx, sy); ctx.rotate(-0.3);
   ctx.strokeStyle = '#c0392b'; ctx.lineWidth = 4;
@@ -903,7 +1163,7 @@ function drawSlipImage(row, ticketId) {
   // 底部说明
   ctx.textAlign = 'center';
   ctx.fillStyle = '#8a958e'; ctx.font = '22px ' + font;
-  ctx.fillText('本代课单由系统自动生成，编号唯一，请妥善保存。', W / 2, 1024);
+  ctx.fillText('本代课单由系统自动生成，编号唯一，请妥善保存。', W / 2, H - 62);
 
   return c.toDataURL('image/png');
 }
@@ -933,29 +1193,6 @@ function fmtTime(iso) {
   return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
 }
 
-// 重置
-document.getElementById('btn-reset').addEventListener('click', () => {
-  form.reset();
-  weekdayInput.value = '';
-  escortToggle.dataset.val = '0';
-  escortToggle.classList.remove('on');
-  escortLabel.textContent = '否';
-});
-
-// 继续登记
-document.getElementById('btn-continue').addEventListener('click', () => {
-  form.reset();
-  weekdayInput.value = '';
-  escortToggle.dataset.val = '0';
-  escortToggle.classList.remove('on');
-  escortLabel.textContent = '否';
-  document.getElementById('register-form-area').classList.remove('hidden');
-  document.getElementById('success-screen').classList.add('hidden');
-});
-
-// 查看后台（未登录会先进入登录页）
-document.getElementById('btn-view-admin').addEventListener('click', () => navigate('admin'));
-
 /* ================= 管理后台逻辑 ================= */
 let sortKey = 'date';
 let sortDir = 'desc';
@@ -966,6 +1203,7 @@ async function renderAdmin() {
   renderStats();
   renderTeacherFilter();
   renderTable();
+  renderDailyStats();
 }
 
 function renderStats() {
@@ -1109,6 +1347,68 @@ function csvCell(v) {
   return v;
 }
 
+// 导出 Excel（明细 + 每日汇总两个工作表）
+document.getElementById('btn-export-xlsx').addEventListener('click', () => {
+  if (allRecords.length === 0) { toast('暂无数据可导出', 'error'); return; }
+  if (typeof XLSX === 'undefined') { toast('Excel 组件未加载，请使用「导出 CSV」', 'error'); return; }
+  const rows = [...allRecords].sort((a, b) => (a.date + a.period + a.section).localeCompare(b.date + b.period + b.section));
+  const detail = rows.map((r, i) => ({
+    '序号': i + 1, '日期': r.date, '星期': r.weekday, '午别': r.period, '节次': r.section,
+    '班级': r.className, '科目': r.subject, '原任教师': r.originalTeacher, '代课教师': r.substituteTeacher,
+    '事由': r.reason, '是否路队': r.escort === '1' ? '是' : '否', '状态': r.status, '备注': r.remark
+  }));
+  const byDate = {};
+  rows.forEach(r => {
+    if (!byDate[r.date]) byDate[r.date] = { classes: new Set(), escort: 0, count: 0, wd: r.weekday };
+    const g = byDate[r.date];
+    g.count++;
+    if (r.className) g.classes.add(r.className);
+    if (r.escort === '1') g.escort++;
+  });
+  const summary = Object.keys(byDate).sort().map(d => {
+    const g = byDate[d];
+    return { '日期': d, '星期': g.wd, '代课总节数': g.count, '涉及班级数': g.classes.size, '送路队节数': g.escort };
+  });
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detail), '代课明细');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summary), '每日汇总');
+  XLSX.writeFile(wb, '代课登记_' + new Date().toISOString().slice(0, 10) + '.xlsx');
+  toast('已导出 Excel', 'success');
+});
+
+// 按日期统计视图
+function renderDailyStats() {
+  const filter = document.getElementById('stats-date').value;
+  let rows = allRecords;
+  if (filter) rows = rows.filter(r => r.date === filter);
+  const chips = document.getElementById('stats-chips');
+  chips.innerHTML =
+    '<span class="chip">总节数 <b>' + rows.length + '</b></span>' +
+    '<span class="chip">涉及班级 <b>' + new Set(rows.map(r => r.className)).size + '</b></span>' +
+    '<span class="chip">送路队 <b>' + rows.filter(r => r.escort === '1').length + '</b></span>' +
+    '<span class="chip">待办 <b>' + rows.filter(r => r.status === '待办').length + '</b></span>' +
+    '<span class="chip">已办 <b>' + rows.filter(r => r.status === '已办').length + '</b></span>';
+  rows.sort((a, b) => a.date.localeCompare(b.date) || a.period.localeCompare(b.period) || a.section.localeCompare(b.section));
+  const body = document.getElementById('stats-body');
+  body.innerHTML = rows.map(r =>
+    '<tr>' +
+      '<td>' + esc(r.date) + (r.weekday ? ' 周' + esc(r.weekday) : '') + '</td>' +
+      '<td>' + esc(r.period) + ' ' + esc(r.section) + '</td>' +
+      '<td>' + esc(r.className || '—') + '</td>' +
+      '<td>' + esc(r.subject || '—') + '</td>' +
+      '<td>' + esc(r.originalTeacher) + '</td>' +
+      '<td>' + esc(r.substituteTeacher) + '</td>' +
+      '<td>' + (r.escort === '1' ? '是' : '否') + '</td>' +
+      '<td>' + esc(r.status) + '</td>' +
+    '</tr>'
+  ).join('') || '<tr><td colspan="8" style="text-align:center;color:var(--text-light)">暂无记录</td></tr>';
+}
+document.getElementById('stats-date').addEventListener('change', renderDailyStats);
+document.getElementById('btn-stats-clear').addEventListener('click', () => {
+  document.getElementById('stats-date').value = '';
+  renderDailyStats();
+});
+
 // 清空全部
 document.getElementById('btn-clear-all').addEventListener('click', () => {
   confirmModal('确认清空所有数据？', `当前共 ${allRecords.length} 条记录，清空后不可恢复`, async () => {
@@ -1154,10 +1454,11 @@ function esc(s) { const d = document.createElement('div'); d.textContent = s||''
 (async function init() {
   if (configured) {
     await initAuth();
+    await loadTeacherNames();
   } else {
     document.getElementById('config-banner').classList.remove('hidden');
   }
-  const initialRoute = location.hash.slice(1) || 'register';
+  const initialRoute = location.hash.slice(1) || 'schedule';
   navigate(initialRoute);
 })();
 </script>
