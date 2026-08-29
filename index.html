@@ -646,7 +646,8 @@ function syncAuthUI() {
   const loggedIn = !!session;
   const ua = document.getElementById('user-area');
   ua.classList.toggle('hidden', !loggedIn);
-  if (loggedIn) document.getElementById('user-email').textContent = session.user.email;
+  // 右上角不显示邮箱（已按要求隐藏）
+  if (loggedIn) document.getElementById('user-email').textContent = '管理';
 }
 
 /* ================= 数据层（Supabase） ================= */
@@ -884,7 +885,7 @@ function openDateDialog(w, p) {
     const doAdd = () => {
       const idx = selectedCells.findIndex(c => c.weekday === w && c.period === p);
       if (idx >= 0) selectedCells[idx].date = date;
-      else selectedCells.push({ weekday: w, period: p, subject: cell.subject, class_name: cell.class_name, date: date });
+      else selectedCells.push({ weekday: w, period: p, subject: cell.subject, class_name: cell.class_name, date: date, escort: '0' });
       root.innerHTML = '';
       renderGrid();
       renderSelected();
@@ -921,9 +922,12 @@ function renderSelected() {
     const missing = !c.teacher;
     return `<div class="sched-sel-item" style="flex-wrap:wrap;align-items:center">
       <span class="si-info" style="flex:1;min-width:210px">${c.date}（周${dateWd}） ${weekdayCn[c.weekday]} ${pi.period}${pi.section} · ${esc(c.class_name || c.subject)}${c.class_name ? ' · ' + esc(c.subject) : ''}</span>
-      <span style="display:flex;gap:6px;align-items:center;flex:1;min-width:230px;flex-wrap:wrap">
+      <span style="display:flex;gap:8px;align-items:center;flex:1;min-width:300px;flex-wrap:wrap">
         <input class="input" list="teacher-list" placeholder="代课教师（必填）" value="${esc(c.teacher || '')}" oninput="cartTeacher(${c.weekday},${c.period},this.value)" style="min-width:150px;flex:1${missing ? ';border-color:var(--danger)' : ''}">
         <button class="btn btn-ghost btn-sm" onclick="findTeacher(${c.weekday},${c.period})">🔍 找老师</button>
+        <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text-muted);white-space:nowrap">
+          <input type="checkbox" style="width:16px;height:16px;accent-color:var(--primary)" ${c.escort === '1' ? 'checked' : ''} onchange="cartEscort(${c.weekday},${c.period},this.checked)"> 送路队
+        </label>
         <span class="si-rm" onclick="removeCell(${c.weekday},${c.period})">移除</span>
       </span>
     </div>`;
@@ -934,6 +938,12 @@ function renderSelected() {
 function cartTeacher(w, p, val) {
   const it = selectedCells.find(c => c.weekday === w && c.period === p);
   if (it) it.teacher = val;
+}
+
+// 记录清单中某节课是否送路队
+function cartEscort(w, p, checked) {
+  const it = selectedCells.find(c => c.weekday === w && c.period === p);
+  if (it) it.escort = checked ? '1' : '0';
 }
 
 // ================= 空闲老师检索 =================
@@ -1048,7 +1058,7 @@ function showSubDialog() {
   const listHtml = sorted.map(c => {
     const pi = periodInfo(c.period);
     const dateWd = weekdayNames[new Date(c.date).getDay()];
-    return `<div class="sub-list-item">${c.date}（周${dateWd}） ${weekdayCn[c.weekday]} ${pi.period}${pi.section} · ${esc(c.class_name || '—')} · ${esc(c.subject)} → 代课：<b>${esc(c.teacher)}</b></div>`;
+    return `<div class="sub-list-item">${c.date}（周${dateWd}） ${weekdayCn[c.weekday]} ${pi.period}${pi.section} · ${esc(c.class_name || '—')} · ${esc(c.subject)} → 代课：<b>${esc(c.teacher)}</b>${c.escort === '1' ? ' · 送路队' : ''}</div>`;
   }).join('');
   const root = document.getElementById('sub-root');
   root.innerHTML = `
@@ -1065,13 +1075,6 @@ function showSubDialog() {
           </select>
         </div>
         <div class="field" style="text-align:left">
-          <label class="field-label">是否路队</label>
-          <div class="toggle-row">
-            <div class="toggle" id="sub-escort" data-val="0"><div class="toggle-knob"></div></div>
-            <span class="toggle-label" id="sub-escort-label">否</span>
-          </div>
-        </div>
-        <div class="field" style="text-align:left">
           <label class="field-label">备注</label>
           <textarea class="textarea" id="sub-remark" placeholder="补充说明（选填）"></textarea>
         </div>
@@ -1081,13 +1084,6 @@ function showSubDialog() {
         </div>
       </div>
     </div>`;
-  document.getElementById('sub-escort').addEventListener('click', () => {
-    const t = document.getElementById('sub-escort');
-    const val = t.dataset.val === '1' ? '0' : '1';
-    t.dataset.val = val;
-    t.classList.toggle('on', val === '1');
-    document.getElementById('sub-escort-label').textContent = val === '1' ? '是' : '否';
-  });
   document.getElementById('sub-cancel').addEventListener('click', () => root.innerHTML = '');
   document.getElementById('sub-overlay').addEventListener('click', e => { if (e.target.id === 'sub-overlay') root.innerHTML = ''; });
   document.getElementById('sub-confirm').addEventListener('click', submitSub);
@@ -1096,7 +1092,6 @@ function showSubDialog() {
 async function submitSub() {
   const reason = document.getElementById('sub-reason').value;
   const remark = document.getElementById('sub-remark').value.trim();
-  const escort = document.getElementById('sub-escort').dataset.val;
   if (!reason) { toast('请选择事由', 'error'); return; }
   if (selectedCells.some(c => !c.teacher)) {
     toast('存在未填代课教师的课程，请返回清单补填', 'error');
@@ -1116,7 +1111,7 @@ async function submitSub() {
       section: pi.section,
       class_name: c.class_name,
       subject: c.subject,
-      escort: escort,
+      escort: c.escort === '1' ? '1' : '0',
       remark: remark
     };
   });
