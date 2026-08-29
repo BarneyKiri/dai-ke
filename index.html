@@ -441,16 +441,12 @@ table.data tbody tr:last-child td { border-bottom: none; }
   <div id="sched-step-table" class="hidden">
     <div class="info-banner" style="margin-bottom:14px">
       <span class="info-icon">💡</span>
-      <span>点击课表中的课程即可选中（可多选），选好后点下方「填写替课信息」。请先选择代课日期（默认今天），提交后会自动生成电子代课单。</span>
+      <span>点击课表中的课程，为每节课选择代课日期后加入清单；可继续点击其他课程。全部选好后点「填写替课信息」统一提交，自动生成电子代课单。</span>
     </div>
     <div class="card form-card" style="margin-bottom:16px">
       <div class="form-body" style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;padding-bottom:16px">
         <div class="field" style="flex:1;min-width:180px;margin:0">
           <label class="field-label">教师：<strong id="sched-teacher-name"></strong></label>
-        </div>
-        <div class="field" style="flex:1;min-width:190px;margin:0">
-          <label class="field-label">代课日期 <span class="req">*</span></label>
-          <input class="input" type="date" id="sched-date">
         </div>
       </div>
     </div>
@@ -459,8 +455,8 @@ table.data tbody tr:last-child td { border-bottom: none; }
     </div>
     <div class="card" style="margin-top:16px;padding:16px">
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px">
-        <strong>已选课程（<span id="sched-selected-count">0</span> 节）</strong>
-        <button class="btn btn-ghost btn-sm" id="btn-clear-selected">清空选择</button>
+        <strong>待提交清单（<span id="sched-selected-count">0</span> 节）</strong>
+        <button class="btn btn-ghost btn-sm" id="btn-clear-selected">清空清单</button>
       </div>
       <div id="sched-selected-list" class="sched-selected-list"></div>
       <div class="form-actions" style="padding:0;margin-top:14px">
@@ -581,6 +577,19 @@ table.data tbody tr:last-child td { border-bottom: none; }
         </table>
       </div>
     </div>
+
+    <!-- 课表管理 -->
+    <div class="card stats-card">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+        <strong style="font-size:16px;color:var(--primary-dark)">课表管理</strong>
+      </div>
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:10px">课表有变动时，上传新的课表 Excel（《教师课表_每页8位_修改后》格式），确认后将替换全部教师的课表。</div>
+      <div class="stats-datebar" style="margin:0">
+        <input type="file" id="sched-file" accept=".xlsx,.xls" style="font-size:13px;max-width:280px">
+        <span id="sched-file-preview" style="font-size:13px;color:var(--text-muted)"></span>
+        <button class="btn btn-primary btn-sm" id="btn-save-schedule" disabled>确认导入课表</button>
+      </div>
+    </div>
   </div>
 </main>
 
@@ -592,6 +601,9 @@ table.data tbody tr:last-child td { border-bottom: none; }
 
 <!-- 替课信息填写弹窗容器 -->
 <div id="sub-root"></div>
+
+<!-- 课程日期选择弹窗容器 -->
+<div id="date-root"></div>
 
 <!-- Modal Container -->
 <div id="modal-root"></div>
@@ -743,7 +755,6 @@ const schedTeacherInput = document.getElementById('sched-teacher-input');
 const teacherListEl = document.getElementById('teacher-list');
 const btnLoadSchedule = document.getElementById('btn-load-schedule');
 const schedTeacherName = document.getElementById('sched-teacher-name');
-const schedDate = document.getElementById('sched-date');
 const schedGrid = document.getElementById('sched-grid');
 const schedSelectedCount = document.getElementById('sched-selected-count');
 const schedSelectedList = document.getElementById('sched-selected-list');
@@ -756,7 +767,7 @@ const weekdayCn = ['', '周一', '周二', '周三', '周四', '周五'];
 
 let teacherNames = [];      // 所有教师名（用于输入提示）
 let currentSchedule = [];   // 当前教师的课表
-let selectedCells = [];     // 勾选的课程
+let selectedCells = [];     // 待提交清单（含各自日期）
 let currentTeacher = '';
 
 // 加载教师名单（输入框下拉提示）
@@ -767,12 +778,12 @@ async function loadTeacherNames() {
   teacherListEl.innerHTML = teacherNames.map(t => `<option value="${esc(t)}"></option>`).join('');
 }
 
-function todayStr() {
+// 该课程星期对应的下一个日期（今天或本周内最近的下一次）
+function nextDateForWd(w) {
   const d = new Date();
-  // 周末默认跳到下周一，方便老师登记下周的课
-  const wd = d.getDay();
-  if (wd === 0) d.setDate(d.getDate() + 1);
-  if (wd === 6) d.setDate(d.getDate() + 2);
+  let diff = w - d.getDay();
+  if (diff < 0) diff += 7;
+  d.setDate(d.getDate() + diff);
   const p = n => String(n).padStart(2, '0');
   return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
 }
@@ -790,7 +801,6 @@ btnLoadSchedule.addEventListener('click', async () => {
   currentSchedule = data;
   selectedCells = [];
   schedTeacherName.textContent = name;
-  schedDate.value = todayStr();
   schedStepName.classList.add('hidden');
   schedStepTable.classList.remove('hidden');
   renderGrid();
@@ -800,10 +810,10 @@ btnLoadSchedule.addEventListener('click', async () => {
 
 // 渲染周课表（周一~周五 × 上午1-3节/下午1-3节）
 function renderGrid() {
-  const selWd = schedDate.value ? new Date(schedDate.value).getDay() : 0; // 1-5 为周一~周五
+  const todayWd = new Date().getDay(); // 0=周日
   let html = '<thead><tr><th></th>';
   for (let w = 1; w <= 5; w++) {
-    html += `<th>${weekdayCn[w]}${w === selWd ? '（选中）' : ''}</th>`;
+    html += `<th>${weekdayCn[w]}${w === todayWd ? '（今天）' : ''}</th>`;
   }
   html += '</tr></thead><tbody>';
   for (let p = 1; p <= 6; p++) {
@@ -812,11 +822,11 @@ function renderGrid() {
     html += `<tr><td class="sched-label"><b>${half}</b>第${idx}节</td>`;
     for (let w = 1; w <= 5; w++) {
       const cell = currentSchedule.find(c => c.weekday === w && c.period === p);
-      const selected = selectedCells.some(c => c.weekday === w && c.period === p);
+      const inCart = selectedCells.some(c => c.weekday === w && c.period === p);
       if (!cell) {
         html += '<td><div class="sched-cell empty"></div></td>';
       } else {
-        html += `<td><button type="button" class="sched-cell${selected ? ' selected' : ''}${w === selWd ? ' today-col' : ''}" data-w="${w}" data-p="${p}" onclick="toggleCell(${w},${p})">
+        html += `<td><button type="button" class="sched-cell${inCart ? ' selected' : ''}${w === todayWd ? ' today-col' : ''}" data-w="${w}" data-p="${p}" onclick="toggleCell(${w},${p})">
           <span class="sc-sub">${esc(cell.subject)}</span>
           <span class="sc-cls">${cell.class_name ? esc(cell.class_name) : '&nbsp;'}</span>
         </button></td>`;
@@ -828,28 +838,67 @@ function renderGrid() {
   schedGrid.innerHTML = html;
 }
 
-// 切换日期：清空已选（星期可能不匹配），并重新高亮该天的列
-schedDate.addEventListener('change', () => {
-  selectedCells = [];
-  renderGrid();
-  renderSelected();
-});
-
-// 勾选/取消课程
+// 点击课程 → 打开日期选择弹窗，加入/修改清单
 function toggleCell(w, p) {
-  const idx = selectedCells.findIndex(c => c.weekday === w && c.period === p);
-  if (idx >= 0) {
-    selectedCells.splice(idx, 1);
-  } else {
-    const cell = currentSchedule.find(c => c.weekday === w && c.period === p);
-    if (cell) selectedCells.push({ weekday: w, period: p, subject: cell.subject, class_name: cell.class_name });
+  openDateDialog(w, p);
+}
+
+function openDateDialog(w, p) {
+  const cell = currentSchedule.find(c => c.weekday === w && c.period === p);
+  if (!cell) return;
+  const existing = selectedCells.find(c => c.weekday === w && c.period === p);
+  const pi = periodInfo(p);
+  const root = document.getElementById('date-root');
+  const label = weekdayCn[w] + ' ' + pi.period + pi.section + ' · ' + esc(cell.class_name || cell.subject) + (cell.class_name ? ' · ' + esc(cell.subject) : '');
+  root.innerHTML = `
+    <div class="modal-overlay" id="date-overlay">
+      <div class="modal sub-modal">
+        <div class="modal-title">选择代课日期</div>
+        <div class="sub-list"><div class="sub-list-item">${label}</div></div>
+        <div class="field" style="text-align:left">
+          <label class="field-label">代课日期 <span class="req">*</span></label>
+          <input class="input" type="date" id="entry-date" value="${existing ? existing.date : nextDateForWd(w)}">
+        </div>
+        <div class="modal-actions">
+          <button class="btn btn-ghost" id="date-cancel">取消</button>
+          ${existing ? '<button class="btn btn-ghost" id="date-remove" style="color:var(--danger)">移除</button>' : ''}
+          <button class="btn btn-primary" id="date-confirm">加入清单</button>
+        </div>
+      </div>
+    </div>`;
+  document.getElementById('date-cancel').addEventListener('click', () => root.innerHTML = '');
+  document.getElementById('date-overlay').addEventListener('click', e => { if (e.target.id === 'date-overlay') root.innerHTML = ''; });
+  if (existing) {
+    document.getElementById('date-remove').addEventListener('click', () => {
+      root.innerHTML = '';
+      removeCell(w, p);
+    });
   }
-  renderGrid();
-  renderSelected();
+  document.getElementById('date-confirm').addEventListener('click', () => {
+    const date = document.getElementById('entry-date').value;
+    if (!date) { toast('请选择日期', 'error'); return; }
+    const dateWd = new Date(date).getDay();
+    const doAdd = () => {
+      const idx = selectedCells.findIndex(c => c.weekday === w && c.period === p);
+      if (idx >= 0) selectedCells[idx].date = date;
+      else selectedCells.push({ weekday: w, period: p, subject: cell.subject, class_name: cell.class_name, date: date });
+      root.innerHTML = '';
+      renderGrid();
+      renderSelected();
+    };
+    if (dateWd !== w) {
+      confirmModal('日期与课表不符', '该课程是' + weekdayCn[w] + '的课，所选日期是星期' + weekdayNames[dateWd] + '，确认以该日期登记吗？', doAdd);
+    } else {
+      doAdd();
+    }
+  });
 }
 
 function removeCell(w, p) {
-  toggleCell(w, p);
+  const idx = selectedCells.findIndex(c => c.weekday === w && c.period === p);
+  if (idx >= 0) selectedCells.splice(idx, 1);
+  renderGrid();
+  renderSelected();
 }
 
 function periodInfo(p) {
@@ -859,13 +908,14 @@ function periodInfo(p) {
 function renderSelected() {
   schedSelectedCount.textContent = selectedCells.length;
   if (selectedCells.length === 0) {
-    schedSelectedList.innerHTML = '<div class="sub-list-item">尚未选择课程，请在上方课表中点击选择</div>';
+    schedSelectedList.innerHTML = '<div class="sub-list-item">清单为空，请点击课表中的课程选择代课日期</div>';
     return;
   }
-  const sorted = [...selectedCells].sort((a, b) => a.weekday - b.weekday || a.period - b.period);
+  const sorted = [...selectedCells].sort((a, b) => a.date.localeCompare(b.date) || a.weekday - b.weekday || a.period - b.period);
   schedSelectedList.innerHTML = sorted.map(c => {
     const pi = periodInfo(c.period);
-    const label = weekdayCn[c.weekday] + ' ' + pi.period + pi.section + ' · ' + esc(c.class_name || c.subject) + (c.class_name ? ' · ' + esc(c.subject) : '');
+    const dateWd = weekdayNames[new Date(c.date).getDay()];
+    const label = c.date + '（周' + dateWd + '） ' + weekdayCn[c.weekday] + ' ' + pi.period + pi.section + ' · ' + esc(c.class_name || c.subject) + (c.class_name ? ' · ' + esc(c.subject) : '');
     return `<div class="sched-sel-item"><span class="si-info">${label}</span><span class="si-rm" onclick="removeCell(${c.weekday},${c.period})">移除</span></div>`;
   }).join('');
 }
@@ -881,16 +931,16 @@ btnBackName.addEventListener('click', () => {
 
 // 第二步：填写替课信息（弹窗）
 btnFillSub.addEventListener('click', () => {
-  if (selectedCells.length === 0) { toast('请先在课表中勾选需要代课的课程', 'error'); return; }
-  if (!schedDate.value) { toast('请选择代课日期', 'error'); return; }
+  if (selectedCells.length === 0) { toast('请先在课表中添加需要代课的课程', 'error'); return; }
   showSubDialog();
 });
 
 function showSubDialog() {
-  const sorted = [...selectedCells].sort((a, b) => a.weekday - b.weekday || a.period - b.period);
+  const sorted = [...selectedCells].sort((a, b) => a.date.localeCompare(b.date) || a.weekday - b.weekday || a.period - b.period);
   const listHtml = sorted.map(c => {
     const pi = periodInfo(c.period);
-    return `<div class="sub-list-item">${weekdayCn[c.weekday]} ${pi.period}${pi.section} · ${esc(c.class_name || '—')} · ${esc(c.subject)}</div>`;
+    const dateWd = weekdayNames[new Date(c.date).getDay()];
+    return `<div class="sub-list-item">${c.date}（周${dateWd}） ${weekdayCn[c.weekday]} ${pi.period}${pi.section} · ${esc(c.class_name || '—')} · ${esc(c.subject)}</div>`;
   }).join('');
   const root = document.getElementById('sub-root');
   root.innerHTML = `
@@ -946,21 +996,14 @@ async function submitSub() {
   const escort = document.getElementById('sub-escort').dataset.val;
   if (!teacher) { toast('请输入代课教师姓名', 'error'); return; }
   if (!reason) { toast('请选择事由', 'error'); return; }
-  const date = schedDate.value;
-  const dateWd = new Date(date).getDay();
-  if (selectedCells.some(c => c.weekday !== dateWd)) {
-    toast('所选课程须与代课日期一致（' + date + ' 是星期' + weekdayNames[dateWd] + '），请重新勾选当天的课程', 'error');
-    return;
-  }
-  const weekday = weekdayNames[dateWd];
   const records = selectedCells.map(c => {
     const pi = periodInfo(c.period);
     return {
       original_teacher: currentTeacher,
       substitute_teacher: teacher,
       reason: reason,
-      date: date,
-      weekday: weekday,
+      date: c.date,
+      weekday: weekdayNames[new Date(c.date).getDay()],
       period: pi.period,
       section: pi.section,
       class_name: c.class_name,
@@ -1083,9 +1126,9 @@ function drawSlipImage(rows, ticketId) {
   // 基本信息（2×2）
   const infoItems = [
     ['原任教师', first.original_teacher], ['代课教师', first.substitute_teacher],
-    ['事由', first.reason], ['日期', first.date + (first.weekday ? ' 星期' + first.weekday : '')],
+    ['事由', first.reason], ['共代课', N + ' 节'],
   ];
-  const left = 66, top = 244, cw = 286, ch = 86, gap = 16;
+  const left = 60, top = 244, cw = 292, ch = 86, gap = 16;
   ctx.textAlign = 'left';
   infoItems.forEach((it, i) => {
     const col = i % 2, r = Math.floor(i / 2);
@@ -1100,35 +1143,36 @@ function drawSlipImage(rows, ticketId) {
     ctx.fillText(clip(ctx, it[1], x + 16, cw - 32, 1), x + 16, y + 62);
   });
 
-  // 课程明细表
+  // 课程明细表（含日期列）
   const listTop = top + 2 * (ch + gap) + 18;
   ctx.fillStyle = '#5f6b64'; ctx.font = 'bold 24px ' + font;
   ctx.fillText('代课课程明细（共 ' + N + ' 节）', left, listTop + 14);
-  const cols = [56, 208, 128, 128, 118];
-  const colX = [left, left + cols[0], left + cols[0] + cols[1], left + cols[0] + cols[1] + cols[2], left + cols[0] + cols[1] + cols[2] + cols[3]];
-  const headers = ['序号', '班级', '科目', '午别节次', '路队'];
+  const cols = [48, 118, 138, 100, 108, 80];
+  const colX = [left, left + cols[0], left + cols[0] + cols[1], left + cols[0] + cols[1] + cols[2], left + cols[0] + cols[1] + cols[2] + cols[3], left + cols[0] + cols[1] + cols[2] + cols[3] + cols[4]];
+  const headers = ['序号', '日期', '班级', '科目', '午别节次', '路队'];
   const rowH = 52, headY = listTop + 40;
   ctx.fillStyle = '#0f6b5c';
-  roundRect(ctx, left, headY, cols[0] + cols[1] + cols[2] + cols[3] + cols[4], rowH, 8); ctx.fill();
-  ctx.fillStyle = '#ffffff'; ctx.font = 'bold 22px ' + font;
+  roundRect(ctx, left, headY, cols[0] + cols[1] + cols[2] + cols[3] + cols[4] + cols[5], rowH, 8); ctx.fill();
+  ctx.fillStyle = '#ffffff'; ctx.font = 'bold 21px ' + font;
   headers.forEach((h, i) => {
     ctx.textAlign = i === 0 ? 'center' : 'left';
-    ctx.fillText(h, i === 0 ? colX[i] + cols[i] / 2 : colX[i] + 12, headY + rowH / 2 + 2);
+    ctx.fillText(h, i === 0 ? colX[i] + cols[i] / 2 : colX[i] + 10, headY + rowH / 2 + 2);
   });
   rows.forEach((r, i) => {
     const y = headY + rowH + 6 + i * (rowH + 6);
     ctx.fillStyle = i % 2 === 0 ? '#f7faf8' : '#ffffff';
-    roundRect(ctx, left, y, cols[0] + cols[1] + cols[2] + cols[3] + cols[4], rowH, 8); ctx.fill();
+    roundRect(ctx, left, y, cols[0] + cols[1] + cols[2] + cols[3] + cols[4] + cols[5], rowH, 8); ctx.fill();
     ctx.strokeStyle = '#e2eae5'; ctx.lineWidth = 1;
-    roundRect(ctx, left, y, cols[0] + cols[1] + cols[2] + cols[3] + cols[4], rowH, 8); ctx.stroke();
-    ctx.fillStyle = '#22302b'; ctx.font = '22px ' + font;
+    roundRect(ctx, left, y, cols[0] + cols[1] + cols[2] + cols[3] + cols[4] + cols[5], rowH, 8); ctx.stroke();
+    ctx.fillStyle = '#22302b'; ctx.font = '21px ' + font;
     ctx.textAlign = 'center';
     ctx.fillText(String(i + 1), colX[0] + cols[0] / 2, y + rowH / 2 + 2);
     ctx.textAlign = 'left';
-    ctx.fillText(clip(ctx, r.class_name || '—', colX[1] + 12, cols[1] - 24, 1), colX[1] + 12, y + rowH / 2 + 2);
-    ctx.fillText(clip(ctx, r.subject || '—', colX[2] + 12, cols[2] - 24, 1), colX[2] + 12, y + rowH / 2 + 2);
-    ctx.fillText((r.period || '') + (r.section || ''), colX[3] + 12, y + rowH / 2 + 2);
-    ctx.fillText(String(r.escort) === '1' ? '是' : '否', colX[4] + 12, y + rowH / 2 + 2);
+    ctx.fillText(clip(ctx, r.date || '—', colX[1] + 10, cols[1] - 20, 1), colX[1] + 10, y + rowH / 2 + 2);
+    ctx.fillText(clip(ctx, r.class_name || '—', colX[2] + 10, cols[2] - 20, 1), colX[2] + 10, y + rowH / 2 + 2);
+    ctx.fillText(clip(ctx, r.subject || '—', colX[3] + 10, cols[3] - 20, 1), colX[3] + 10, y + rowH / 2 + 2);
+    ctx.fillText((r.period || '') + (r.section || ''), colX[4] + 10, y + rowH / 2 + 2);
+    ctx.fillText(String(r.escort) === '1' ? '是' : '否', colX[5] + 10, y + rowH / 2 + 2);
   });
 
   // 备注（整行）
@@ -1407,6 +1451,81 @@ document.getElementById('stats-date').addEventListener('change', renderDailyStat
 document.getElementById('btn-stats-clear').addEventListener('click', () => {
   document.getElementById('stats-date').value = '';
   renderDailyStats();
+});
+
+// ================= 课表管理（导入新课表） =================
+let parsedSchedule = [];
+
+// 解析课表 Excel（与导入脚本同规则：每9行一个块，每块2位教师，姓名形如"XXX(N节)"）
+function parseScheduleWorkbook(wb) {
+  const out = [];
+  wb.SheetNames.forEach(sn => {
+    const ws = wb.Sheets[sn];
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true });
+    for (let start = 0; start < rows.length; start += 9) {
+      [0, 8].forEach(col => {
+        const nameCell = rows[start] && rows[start][col];
+        if (nameCell === undefined || nameCell === null) return;
+        const nm = String(nameCell).replace(/\n/g, '').trim();
+        const m = nm.match(/^(.*?)\((\d+)节?\)$/);
+        if (!m) return;
+        const teacher = m[1].trim();
+        const wdCols = col === 0 ? [2, 3, 4, 5, 6] : [10, 11, 12, 13, 14];
+        for (let r = start + 2; r < start + 8; r++) {
+          const period = rows[r] && rows[r][col + 1];
+          const p = parseInt(period, 10);
+          if (isNaN(p)) continue;
+          wdCols.forEach((c, i) => {
+            const v = rows[r] && rows[r][c];
+            if (v === undefined || v === null || v === '') return;
+            let s = String(v).replace(/\n/g, '').replace(/（/g, '(').replace(/）/g, ')').trim();
+            let subject = s, cls = '';
+            const cm = s.match(/^(.*?)\((.*?)\)$/);
+            if (cm) { subject = cm[1].trim(); cls = cm[2].trim(); }
+            out.push({ teacher_name: teacher, weekday: i + 1, period: p, class_name: cls, subject: subject });
+          });
+        }
+      });
+    }
+  });
+  return out;
+}
+
+document.getElementById('sched-file').addEventListener('change', (e) => {
+  const file = e.target.files && e.target.files[0];
+  const preview = document.getElementById('sched-file-preview');
+  const btn = document.getElementById('btn-save-schedule');
+  parsedSchedule = [];
+  if (!file) { preview.textContent = ''; btn.disabled = true; return; }
+  if (typeof XLSX === 'undefined') { preview.textContent = 'Excel 组件未加载，无法解析'; return; }
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    try {
+      const wb = XLSX.read(new Uint8Array(ev.target.result), { type: 'array' });
+      parsedSchedule = parseScheduleWorkbook(wb);
+      if (parsedSchedule.length === 0) { preview.textContent = '未解析到课表数据，请检查文件格式'; btn.disabled = true; return; }
+      const teachers = new Set(parsedSchedule.map(r => r.teacher_name)).size;
+      preview.textContent = '解析到 ' + teachers + ' 位教师、' + parsedSchedule.length + ' 节课';
+      btn.disabled = false;
+    } catch (err) {
+      preview.textContent = '解析失败：' + err.message;
+      btn.disabled = true;
+    }
+  };
+  reader.readAsArrayBuffer(file);
+});
+
+document.getElementById('btn-save-schedule').addEventListener('click', async () => {
+  if (parsedSchedule.length === 0) { toast('请先选择课表文件', 'error'); return; }
+  const btn = document.getElementById('btn-save-schedule');
+  btn.disabled = true;
+  const { data, error } = await sb.rpc('replace_schedules', { p: parsedSchedule });
+  btn.disabled = false;
+  if (error) { toast('导入失败：' + error.message, 'error'); return; }
+  toast('课表已更新：' + (data.inserted || parsedSchedule.length) + ' 条', 'success');
+  document.getElementById('sched-file-preview').textContent = '';
+  document.getElementById('sched-file').value = '';
+  parsedSchedule = [];
 });
 
 // 清空全部
