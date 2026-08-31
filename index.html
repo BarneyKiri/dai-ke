@@ -1193,7 +1193,7 @@ function drawSlipImage(rows, ticketId) {
   const first = rows[0];
   const N = rows.length;
   const W = 720;
-  const H = Math.max(1080, 700 + N * 74 + 320);
+  const H = Math.max(1080, 700 + N * 80 + 320);
   const c = document.createElement('canvas');
   c.width = W; c.height = H;
   const ctx = c.getContext('2d');
@@ -1250,10 +1250,10 @@ function drawSlipImage(rows, ticketId) {
   const listTop = top + 2 * (ch + gap) + 18;
   ctx.fillStyle = '#5f6b64'; ctx.font = 'bold 24px ' + font;
   ctx.fillText('代课课程明细（共 ' + N + ' 节）', left, listTop + 14);
-  const cols = [48, 118, 138, 100, 108, 80];
+  const cols = [42, 150, 122, 100, 116, 72];
   const colX = [left, left + cols[0], left + cols[0] + cols[1], left + cols[0] + cols[1] + cols[2], left + cols[0] + cols[1] + cols[2] + cols[3], left + cols[0] + cols[1] + cols[2] + cols[3] + cols[4]];
   const headers = ['序号', '日期', '班级', '科目', '午别节次', '路队'];
-  const rowH = 52, headY = listTop + 40;
+  const rowH = 56, headY = listTop + 40;
   ctx.fillStyle = '#0f6b5c';
   roundRect(ctx, left, headY, cols[0] + cols[1] + cols[2] + cols[3] + cols[4] + cols[5], rowH, 8); ctx.fill();
   ctx.fillStyle = '#ffffff'; ctx.font = 'bold 21px ' + font;
@@ -1271,7 +1271,13 @@ function drawSlipImage(rows, ticketId) {
     ctx.textAlign = 'center';
     ctx.fillText(String(i + 1), colX[0] + cols[0] / 2, y + rowH / 2 + 2);
     ctx.textAlign = 'left';
-    ctx.fillText(clip(ctx, r.date || '—', colX[1] + 10, cols[1] - 20, 1), colX[1] + 10, y + rowH / 2 + 2);
+    // 日期两行显示：第一行日期，第二行（星期），保证完整不截断
+    if (r.weekday) {
+      ctx.fillText(clip(ctx, r.date || '—', colX[1] + 10, cols[1] - 20, 1), colX[1] + 10, y + 22);
+      ctx.fillText('（' + r.weekday + '）', colX[1] + 10, y + 42);
+    } else {
+      ctx.fillText(clip(ctx, r.date || '—', colX[1] + 10, cols[1] - 20, 1), colX[1] + 10, y + rowH / 2 + 2);
+    }
     ctx.fillText(clip(ctx, r.class_name || '—', colX[2] + 10, cols[2] - 20, 1), colX[2] + 10, y + rowH / 2 + 2);
     ctx.fillText(clip(ctx, r.subject || '—', colX[3] + 10, cols[3] - 20, 1), colX[3] + 10, y + rowH / 2 + 2);
     ctx.fillText((r.period || '') + (r.section || ''), colX[4] + 10, y + rowH / 2 + 2);
