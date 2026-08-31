@@ -1559,27 +1559,31 @@ document.getElementById('btn-stats-clear').addEventListener('click', () => {
 // ================= 课表管理（导入新课表） =================
 let parsedSchedule = [];
 
-// 解析课表 Excel（与导入脚本同规则：每9行一个块，每块2位教师，姓名形如"XXX(N节)"）
+// 解析课表 Excel（新格式：教师姓名在 H/Q 列，节次在 B/K 列，星期在 D-H/M-Q 列；
+//          每个姓名块 8 行 = 姓名行 + 表头行 + 6 行课程，块之间可能有空行/"课程表"分隔行）
 function parseScheduleWorkbook(wb) {
   const out = [];
   wb.SheetNames.forEach(sn => {
     const ws = wb.Sheets[sn];
     const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true });
-    for (let start = 0; start < rows.length; start += 9) {
-      [0, 8].forEach(col => {
-        const nameCell = rows[start] && rows[start][col];
-        if (nameCell === undefined || nameCell === null) return;
+    const colSpec = [
+      { nameCol: 7, periodCol: 1, wdCols: [3, 4, 5, 6, 7] },    // 左半块（H/B/D-H）
+      { nameCol: 16, periodCol: 10, wdCols: [12, 13, 14, 15, 16] } // 右半块（Q/K/M-Q）
+    ];
+    for (let r = 0; r < rows.length; r++) {
+      colSpec.forEach(spec => {
+        const nameCell = rows[r] && rows[r][spec.nameCol];
+        if (nameCell === undefined || nameCell === null || nameCell === '') return;
         const nm = String(nameCell).replace(/\n/g, '').trim();
         const m = nm.match(/^(.*?)\((\d+)节?\)$/);
         if (!m) return;
         const teacher = m[1].trim();
-        const wdCols = col === 0 ? [2, 3, 4, 5, 6] : [10, 11, 12, 13, 14];
-        for (let r = start + 2; r < start + 8; r++) {
-          const period = rows[r] && rows[r][col + 1];
+        for (let rr = r + 2; rr < r + 8; rr++) { // 6 行课程
+          const period = rows[rr] && rows[rr][spec.periodCol];
           const p = parseInt(period, 10);
           if (isNaN(p)) continue;
-          wdCols.forEach((c, i) => {
-            const v = rows[r] && rows[r][c];
+          spec.wdCols.forEach((c, i) => {
+            const v = rows[rr] && rows[rr][c];
             if (v === undefined || v === null || v === '') return;
             let s = String(v).replace(/\n/g, '').replace(/（/g, '(').replace(/）/g, ')').trim();
             let subject = s, cls = '';
