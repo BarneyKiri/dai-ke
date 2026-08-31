@@ -177,6 +177,8 @@ a { color: inherit; text-decoration: none; }
 .btn-sm { padding: 7px 14px; font-size: 13px; }
 .btn-danger-text { color: var(--danger); padding: 7px 12px; font-size: 13px; border-radius: 6px; }
 .btn-danger-text:hover { background: var(--danger-light); }
+.btn-text { color: var(--primary); padding: 7px 12px; font-size: 13px; border-radius: 6px; }
+.btn-text:hover { background: var(--primary-light); }
 .btn:disabled { opacity: .6; cursor: not-allowed; transform: none !important; }
 
 /* ===== Dashboard ===== */
@@ -656,6 +658,7 @@ let allRecords = [];
 function mapRow(r) {
   return {
     id: r.id,
+    ticketId: r.ticket_id || '',
     originalTeacher: r.original_teacher,
     substituteTeacher: r.substitute_teacher,
     reason: r.reason || '',
@@ -1147,9 +1150,25 @@ async function addRecordBatch(records, force) {
 
 // 提交成功：生成电子代课单并弹出（含唯一编号，提醒老师截图保存）
 function finishSubmit(rows) {
-  const ticketId = genTicketId(rows[0]);
+  // rows 为数据库原始行（snake_case），优先取数据库回写的 ticket_id
+  const ticketId = rows[0].ticket_id || rows[0].ticketId || genTicketId(rows[0]);
   showSlipModal(rows, ticketId);
   toast('登记成功，已生成电子代课单', 'success');
+}
+
+// 后台查看代课单：按票号拉取整批记录并展示
+async function viewSlip(ticketId) {
+  if (!ticketId) {
+    toast('该记录无票号，无法查看代课单', 'error');
+    return;
+  }
+  const { data, error } = await sb.from('substitute_registrations')
+    .select('*').eq('ticket_id', ticketId).order('id', { ascending: true });
+  if (error) { toast('读取代课单失败：' + error.message, 'error'); return; }
+  // 注意：绘制代课单需要数据库原始字段（snake_case），此处不做 mapRow 转换
+  const rows = data || [];
+  if (rows.length === 0) { toast('未找到该代课单记录', 'error'); return; }
+  showSlipModal(rows, rows[0].ticket_id || ticketId, true);
 }
 
 // 唯一编号：DK-日期(8位)-数据库序号(至少4位)，如 DK-20260829-0001
@@ -1159,23 +1178,32 @@ function genTicketId(row) {
   return 'DK-' + d + '-' + id;
 }
 
-// 电子代课单弹窗：展示画布生成的代课单图片 + 截图提醒
-function showSlipModal(rows, ticketId) {
+// 电子代课单弹窗：展示画布生成的代课单图片 + 截图提醒；view=true 时为后台查看模式
+function showSlipModal(rows, ticketId, view) {
   const img = drawSlipImage(rows, ticketId);
   const root = document.getElementById('slip-root');
   const n = rows.length;
   root.innerHTML = `
     <div class="modal-overlay" id="slip-overlay">
       <div class="modal slip-modal">
-        <div class="slip-title">🎫 电子代课单已生成</div>
-        <div class="slip-remind">小字提醒：请截图保存本代课单（共 ${n} 节课）。每张代课单编号唯一，请勿重复提交。</div>
+        <div class="slip-title">${view ? '📄 查看代课单' : '🎫 电子代课单已生成'}</div>
+        ${view ? '' : `<div class="slip-remind">小字提醒：请截图保存本代课单（共 ${n} 节课）。每张代课单编号唯一，请勿重复提交。</div>`}
         <img class="slip-img" src="${img}" alt="电子代课单 ${ticketId}">
         <div class="slip-actions">
-          <button class="btn btn-primary" id="slip-close" style="width:100%">继续登记</button>
+          ${view ? `<button class="btn btn-ghost" id="slip-save">保存图片</button>` : ''}
+          <button class="btn btn-primary" id="slip-close" style="${view ? '' : 'width:100%'}">${view ? '关闭' : '继续登记'}</button>
         </div>
       </div>
     </div>`;
   document.getElementById('slip-close').addEventListener('click', closeSlipModal);
+  const saveBtn = document.getElementById('slip-save');
+  if (saveBtn) saveBtn.addEventListener('click', () => {
+    const a = document.createElement('a');
+    a.href = img;
+    a.download = '代课单_' + ticketId + '.png';
+    a.click();
+    toast('已保存代课单图片', 'success');
+  });
   document.getElementById('slip-overlay').addEventListener('click', e => { if (e.target.id === 'slip-overlay') closeSlipModal(); });
 }
 
@@ -1422,6 +1450,7 @@ function renderTable() {
       <td><span class="badge ${r.escort==='1'?'badge-yes':'badge-no'}">${r.escort==='1'?'是':'否'}</span></td>
       <td><span class="badge ${r.status==='待办'?'badge-pending':'badge-done'} status-click" data-id="${r.id}">${r.status}</span></td>
       <td class="action-cell">
+        <button class="btn-text" data-slip="${r.id}">代课单</button>
         <button class="btn-danger-text" data-del="${r.id}">删除</button>
       </td>
     </tr>
@@ -1444,6 +1473,14 @@ function renderTable() {
       await refreshData();
       renderAdmin();
       toast(`已标记为「${newStatus}」`, 'success');
+    });
+  });
+  // 行内事件：查看代课单
+  tbody.querySelectorAll('[data-slip]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const rec = allRecords.find(r => r.id === Number(btn.dataset.slip));
+      if (!rec) return;
+      viewSlip(rec.ticketId || genTicketId(rec));
     });
   });
   // 行内事件：删除
