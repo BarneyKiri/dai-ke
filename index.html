@@ -1574,7 +1574,7 @@ function parseScheduleWorkbook(wb) {
       colSpec.forEach(spec => {
         const nameCell = rows[r] && rows[r][spec.nameCol];
         if (nameCell === undefined || nameCell === null || nameCell === '') return;
-        const nm = String(nameCell).replace(/\n/g, '').trim();
+        const nm = String(nameCell).replace(/\r/g, '').replace(/\n/g, '').trim();
         const m = nm.match(/^(.*?)\((\d+)节?\)$/);
         if (!m) return;
         const teacher = m[1].trim();
@@ -1585,10 +1585,11 @@ function parseScheduleWorkbook(wb) {
           spec.wdCols.forEach((c, i) => {
             const v = rows[rr] && rows[rr][c];
             if (v === undefined || v === null || v === '') return;
-            let s = String(v).replace(/\n/g, '').replace(/（/g, '(').replace(/）/g, ')').trim();
+            let s = String(v).replace(/\r/g, '').replace(/\n/g, '').replace(/（/g, '(').replace(/）/g, ')').trim();
             let subject = s, cls = '';
             const cm = s.match(/^(.*?)\((.*?)\)$/);
             if (cm) { subject = cm[1].trim(); cls = cm[2].trim(); }
+            if (subject === '综活') cls = ''; // 综活不带班级
             out.push({ teacher_name: teacher, weekday: i + 1, period: p, class_name: cls, subject: subject });
           });
         }
